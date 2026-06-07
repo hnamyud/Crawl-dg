@@ -8,3 +8,5 @@ outputs/
 *.pyo
 *.pyd
 *.log
+*.spec
+Tong_Hop_Phan_Luong_Chuan_DGTS.xlsx
