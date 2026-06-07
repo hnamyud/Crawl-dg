@@ -193,10 +193,11 @@ class CrawlerTab(ttk.Frame):
         self.auction_district_combo: ttk.Combobox | None = None
         self.auction_property_type_combo: ttk.Combobox | None = None
 
+        self._log_batch: list[str] = []
         self._build_layout()
         if self.notice_kind == "auction":
             self._load_initial_auction_options()
-        self.after(150, self._drain_events)
+        self.after(250, self._drain_events)
 
     def _build_layout(self) -> None:
         if self.notice_kind == "auction":
@@ -227,12 +228,15 @@ class CrawlerTab(ttk.Frame):
 
         actions = ttk.Frame(self)
         actions.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(16, 8))
-        actions.columnconfigure(1, weight=1)
+        actions.columnconfigure(2, weight=1)
         self.run_button = ttk.Button(actions, text="Bắt đầu crawl", command=self._start_crawl)
         self.run_button.grid(row=0, column=0, sticky="w")
         self.stop_button = ttk.Button(actions, text="Dừng và xuất file", command=self._stop_crawl, state="disabled")
         self.stop_button.grid(row=0, column=1, sticky="w", padx=(10, 0))
-        ttk.Label(actions, textvariable=self.status).grid(row=0, column=2, sticky="e")
+        ttk.Button(actions, text="Clear bộ lọc", command=self._clear_filters).grid(
+            row=0, column=2, sticky="w", padx=(10, 0)
+        )
+        ttk.Label(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
 
         ttk.Label(self, text="Log").grid(row=12, column=0, sticky="nw", pady=(8, 4))
         self.log = tk.Text(self, height=14, wrap="word", state="disabled")
@@ -282,12 +286,15 @@ class CrawlerTab(ttk.Frame):
 
         actions = ttk.Frame(self)
         actions.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(16, 8))
-        actions.columnconfigure(1, weight=1)
+        actions.columnconfigure(2, weight=1)
         self.run_button = ttk.Button(actions, text="Bắt đầu crawl", command=self._start_crawl)
         self.run_button.grid(row=0, column=0, sticky="w")
         self.stop_button = ttk.Button(actions, text="Dừng và xuất file", command=self._stop_crawl, state="disabled")
         self.stop_button.grid(row=0, column=1, sticky="w", padx=(10, 0))
-        ttk.Label(actions, textvariable=self.status).grid(row=0, column=2, sticky="e")
+        ttk.Button(actions, text="Clear bộ lọc", command=self._clear_filters).grid(
+            row=0, column=2, sticky="w", padx=(10, 0)
+        )
+        ttk.Label(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
 
         ttk.Label(self, text="Log").grid(row=14, column=0, sticky="nw", pady=(8, 4))
         self.log = tk.Text(self, height=14, wrap="word", state="disabled")
@@ -605,30 +612,35 @@ class CrawlerTab(ttk.Frame):
     def _drain_events(self) -> None:
         if self.notice_kind == "auction":
             self._drain_auction_option_events()
-        while True:
+        batch_count = 0
+        while batch_count < 50:
             try:
                 run_id, kind, message = self.events.get_nowait()
             except queue.Empty:
                 break
             if run_id != self.run_id:
                 continue
+            batch_count += 1
             if kind == "log":
-                self._append_log(message)
+                self._log_batch.append(message)
             elif kind == "done":
-                self._append_log(message)
+                self._log_batch.append(message)
+                self._flush_log_batch()
                 self.status.set("Hoàn tất")
                 self.run_button.configure(state="normal")
                 self.stop_button.configure(state="disabled")
                 self.coordinator.finish(self.run_label)
                 messagebox.showinfo("Hoàn tất", message)
             elif kind == "error":
-                self._append_log(f"Lỗi: {message}")
+                self._log_batch.append(f"Lỗi: {message}")
+                self._flush_log_batch()
                 self.status.set("Lỗi")
                 self.run_button.configure(state="normal")
                 self.stop_button.configure(state="disabled")
                 self.coordinator.finish(self.run_label)
                 messagebox.showerror("Lỗi", message)
-        self.after(150, self._drain_events)
+        self._flush_log_batch()
+        self.after(250, self._drain_events)
 
     def _clear_events(self) -> None:
         while True:
@@ -642,6 +654,56 @@ class CrawlerTab(ttk.Frame):
         self.log.insert("end", f"{message}\n")
         self.log.see("end")
         self.log.configure(state="disabled")
+
+    def _flush_log_batch(self) -> None:
+        if not self._log_batch:
+            return
+        self.log.configure(state="normal")
+        self.log.insert("end", "\n".join(self._log_batch) + "\n")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+        self._log_batch.clear()
+
+    def _clear_filters(self) -> None:
+        """Reset all filter fields to their default values."""
+        today = datetime.now()
+        if self.notice_kind == "auction":
+            self.auction_selected_org.set("Tất cả")
+            self.auction_full_name.set("")
+            self.auction_start_date.set("")
+            self.auction_end_date.set("")
+            self.auction_start_publish_date.set((today - timedelta(days=7)).strftime("%d/%m/%Y"))
+            self.auction_end_publish_date.set(today.strftime("%d/%m/%Y"))
+            if self.auction_start_date_picker:
+                self.auction_start_date_picker.delete(0, "end")
+            if self.auction_end_date_picker:
+                self.auction_end_date_picker.delete(0, "end")
+            if self.auction_start_publish_date_picker:
+                self.auction_start_publish_date_picker.set_date(today - timedelta(days=7))
+            if self.auction_end_publish_date_picker:
+                self.auction_end_publish_date_picker.set_date(today)
+            self.auction_province.set("Tất cả")
+            self.auction_district.set("Tất cả")
+            self.auction_from_price.set("")
+            self.auction_to_price.set("")
+            self.auction_type_order.set("Ngày công khai việc đấu giá")
+            self.auction_property_type.set("Tất cả")
+            self._auction_district_options = {"Tất cả": ""}
+            self._set_combo_values(self.auction_district_combo, self._auction_district_options)
+            if self.auction_district_combo:
+                self.auction_district_combo.configure(state="disabled")
+            self._load_initial_auction_options()
+        else:
+            self.from_date.set((today - timedelta(days=7)).strftime("%d/%m/%Y"))
+            self.to_date.set(today.strftime("%d/%m/%Y"))
+            if self.from_date_picker:
+                self.from_date_picker.set_date(today - timedelta(days=7))
+            if self.to_date_picker:
+                self.to_date_picker.set_date(today)
+        self.max_pages.set("10")
+        self.page_size.set(DEFAULT_UI_PAGE_SIZE)
+        self.detail_workers.set(DEFAULT_DETAIL_WORKERS)
+        self.crawl_all.set(False)
 
 
 class HistoryTab(ttk.Frame):
@@ -770,8 +832,10 @@ class HistoryTab(ttk.Frame):
             messagebox.showerror("Không tải được lịch sử", str(exc))
             return
 
-        for item in self.table.get_children():
-            self.table.delete(item)
+        # Batch update: detach all items then rebuild to reduce flicker
+        existing = self.table.get_children()
+        if existing:
+            self.table.delete(*existing)
         for row in self.rows:
             self.table.insert(
                 "",
@@ -834,8 +898,8 @@ class CrawlerApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("DGTS Crawler")
-        self.geometry("920x620")
-        self.minsize(820, 560)
+        self.geometry("980x820")
+        self.minsize(900, 720)
         self.run_coordinator = RunCoordinator()
         self._build_layout()
 
