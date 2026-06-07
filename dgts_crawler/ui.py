@@ -8,7 +8,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+import customtkinter as ctk
 from tkcalendar import DateEntry
+
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("blue")
 
 from .client import DGTSCrawlerClient
 from .history_report import write_history_report
@@ -135,17 +139,17 @@ class RunCoordinator:
             self.active_label = ""
 
 
-class CrawlerTab(ttk.Frame):
+class CrawlerTab(ctk.CTkFrame):
     def __init__(
         self,
-        parent: ttk.Notebook,
+        parent: ctk.CTkFrame,
         notice_kind: str,
         output_default: Path,
         header: str,
         run_label: str,
         coordinator: RunCoordinator,
     ) -> None:
-        super().__init__(parent, padding=16)
+        super().__init__(parent, fg_color="transparent")
         self.notice_kind = notice_kind
         self.header = header
         self.run_label = run_label
@@ -185,9 +189,9 @@ class CrawlerTab(ttk.Frame):
         self._select_org_option_events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.select_org_start_date_picker: DateEntry | None = None
         self.select_org_end_date_picker: DateEntry | None = None
-        self.select_org_province_combo: ttk.Combobox | None = None
-        self.select_org_district_combo: ttk.Combobox | None = None
-        self.select_org_property_type_combo: ttk.Combobox | None = None
+        self.select_org_province_combo: ctk.CTkComboBox | None = None
+        self.select_org_district_combo: ctk.CTkComboBox | None = None
+        self.select_org_property_type_combo: ctk.CTkComboBox | None = None
         # --- Select-Org-Result (Tab 3) filter vars ---
         self.result_owner_fullname = tk.StringVar(value="")
         self.result_org = tk.StringVar(value="Tất cả")
@@ -203,10 +207,10 @@ class CrawlerTab(ttk.Frame):
         self._result_option_events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.result_publish_start_picker: DateEntry | None = None
         self.result_publish_end_picker: DateEntry | None = None
-        self.result_org_combo: ttk.Combobox | None = None
-        self.result_province_combo: ttk.Combobox | None = None
-        self.result_district_combo: ttk.Combobox | None = None
-        self.result_property_type_combo: ttk.Combobox | None = None
+        self.result_org_combo: ctk.CTkComboBox | None = None
+        self.result_province_combo: ctk.CTkComboBox | None = None
+        self.result_district_combo: ctk.CTkComboBox | None = None
+        self.result_property_type_combo: ctk.CTkComboBox | None = None
         # --- Shared ---
         self.max_pages = tk.StringVar(value="10")
         self.page_size = tk.StringVar(value=DEFAULT_UI_PAGE_SIZE)
@@ -225,10 +229,10 @@ class CrawlerTab(ttk.Frame):
         self.auction_end_date_picker: DateEntry | None = None
         self.auction_start_publish_date_picker: DateEntry | None = None
         self.auction_end_publish_date_picker: DateEntry | None = None
-        self.auction_org_combo: ttk.Combobox | None = None
-        self.auction_province_combo: ttk.Combobox | None = None
-        self.auction_district_combo: ttk.Combobox | None = None
-        self.auction_property_type_combo: ttk.Combobox | None = None
+        self.auction_org_combo: ctk.CTkComboBox | None = None
+        self.auction_province_combo: ctk.CTkComboBox | None = None
+        self.auction_district_combo: ctk.CTkComboBox | None = None
+        self.auction_property_type_combo: ctk.CTkComboBox | None = None
 
         self._log_batch: list[str] = []
         self._build_layout()
@@ -253,7 +257,7 @@ class CrawlerTab(ttk.Frame):
     def _build_simple_layout(self) -> None:
         """Simple date-range-only layout used by Tab 3 (select-org-result)."""
         self.columnconfigure(1, weight=1)
-        ttk.Label(self, text=self.header, font=("Segoe UI", 14, "bold")).grid(
+        ctk.CTkLabel(self, text=self.header, font=("Segoe UI", 16, "bold")).grid(
             row=0, column=0, columnspan=3, sticky="w", pady=(0, 14)
         )
         self.from_date_picker = self._date_entry(1, "Từ ngày", self.from_date)
@@ -262,29 +266,30 @@ class CrawlerTab(ttk.Frame):
         self._entry(4, "Số trang tối đa", self.max_pages, "Bỏ qua khi chọn crawl toàn bộ")
         self._entry(5, "Số bản ghi mỗi trang", self.page_size, "Mặc định 100 bản ghi để crawl nhanh hơn")
         self._entry(6, "Số luồng tải chi tiết", self.detail_workers, "Mặc định 5 luồng")
-        ttk.Checkbutton(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc ngày", variable=self.crawl_all).grid(
+        ctk.CTkCheckBox(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc ngày", variable=self.crawl_all).grid(
             row=7, column=1, sticky="w", pady=8
         )
         self._path_entry(8, "File lưu kết quả", self.output_path, self._browse_output)
         self._path_entry(9, "File DB lịch sử", self.history_db_path, self._browse_history_db)
-        ttk.Checkbutton(
+        ctk.CTkCheckBox(
             self,
             text="Lưu lịch sử và phát hiện thay đổi",
             variable=self.enable_history,
         ).grid(row=10, column=1, sticky="w", pady=8)
-        actions = ttk.Frame(self)
+        actions = ctk.CTkFrame(self, fg_color="transparent")
         actions.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(16, 8))
         actions.columnconfigure(2, weight=1)
-        self.run_button = ttk.Button(actions, text="Bắt đầu crawl", command=self._start_crawl)
+        self.run_button = ctk.CTkButton(actions, text="Bắt đầu crawl", command=self._start_crawl, width=120)
         self.run_button.grid(row=0, column=0, sticky="w")
-        self.stop_button = ttk.Button(actions, text="Dừng và xuất file", command=self._stop_crawl, state="disabled")
+        self.stop_button = ctk.CTkButton(actions, text="Dừng và xuất file", command=self._stop_crawl, state="disabled", width=140)
         self.stop_button.grid(row=0, column=1, sticky="w", padx=(10, 0))
-        ttk.Button(actions, text="Clear bộ lọc", command=self._clear_filters).grid(
+        ctk.CTkButton(actions, text="Clear bộ lọc", command=self._clear_filters, width=110).grid(
             row=0, column=2, sticky="w", padx=(10, 0)
         )
-        ttk.Label(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
-        ttk.Label(self, text="Log").grid(row=12, column=0, sticky="nw", pady=(8, 4))
-        self.log = tk.Text(self, height=14, wrap="word", state="disabled")
+        ctk.CTkLabel(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
+        ctk.CTkLabel(self, text="Log").grid(row=12, column=0, sticky="nw", pady=(8, 4))
+        self.log = ctk.CTkTextbox(self, height=220, wrap="word")
+        self.log.configure(state="disabled")
         self.log.grid(row=13, column=0, columnspan=3, sticky="nsew")
         self.rowconfigure(13, weight=1)
 
@@ -292,13 +297,13 @@ class CrawlerTab(ttk.Frame):
         """Rich filter layout for Tab 3 (select-org-result), matching the DGTS website."""
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=1)
-        ttk.Label(self, text=self.header, font=("Segoe UI", 14, "bold")).grid(
+        ctk.CTkLabel(self, text=self.header, font=("Segoe UI", 16, "bold")).grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 14)
         )
         self._entry_field(1, 0, "Người có tài sản", self.result_owner_fullname, "Tên người có tài sản")
         self.result_org_combo = self._combo_field(1, 1, "Tên Tổ chức", self.result_org)
         self.result_province_combo = self._combo_field(2, 0, "Tỉnh/Thành phố", self.result_province)
-        self.result_province_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_result_province_selected())
+        self.result_province_combo.configure(command=lambda _val: self._on_result_province_selected())
         self.result_district_combo = self._combo_field(2, 1, "Quận/Huyện", self.result_district)
         self.result_district_combo.configure(state="disabled")
         self.result_property_type_combo = self._combo_field(3, 0, "Loại tài sản", self.result_property_type)
@@ -308,37 +313,38 @@ class CrawlerTab(ttk.Frame):
         self._entry(4, "Số trang tối đa", self.max_pages, "Bỏ qua khi chọn crawl toàn bộ")
         self._entry(5, "Số bản ghi mỗi trang", self.page_size, "Mặc định 100 bản ghi để crawl nhanh hơn")
         self._entry(6, "Số luồng tải chi tiết", self.detail_workers, "Mặc định 5 luồng")
-        ttk.Checkbutton(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc", variable=self.crawl_all).grid(
-            row=7, column=0, columnspan=2, sticky="w", pady=8
+        ctk.CTkCheckBox(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc", variable=self.crawl_all).grid(
+            row=7, column=0, columnspan=3, sticky="w", pady=8
         )
         self._path_entry(8, "File lưu kết quả", self.output_path, self._browse_output)
         self._path_entry(9, "File DB lịch sử", self.history_db_path, self._browse_history_db)
-        ttk.Checkbutton(
+        ctk.CTkCheckBox(
             self,
             text="Lưu lịch sử và phát hiện thay đổi",
             variable=self.enable_history,
-        ).grid(row=10, column=0, columnspan=2, sticky="w", pady=8)
-        actions = ttk.Frame(self)
-        actions.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(16, 8))
+        ).grid(row=10, column=0, columnspan=3, sticky="w", pady=8)
+        actions = ctk.CTkFrame(self, fg_color="transparent")
+        actions.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(16, 8))
         actions.columnconfigure(2, weight=1)
-        self.run_button = ttk.Button(actions, text="Bắt đầu crawl", command=self._start_crawl)
+        self.run_button = ctk.CTkButton(actions, text="Bắt đầu crawl", command=self._start_crawl, width=120)
         self.run_button.grid(row=0, column=0, sticky="w")
-        self.stop_button = ttk.Button(actions, text="Dừng và xuất file", command=self._stop_crawl, state="disabled")
+        self.stop_button = ctk.CTkButton(actions, text="Dừng và xuất file", command=self._stop_crawl, state="disabled", width=140)
         self.stop_button.grid(row=0, column=1, sticky="w", padx=(10, 0))
-        ttk.Button(actions, text="Clear bộ lọc", command=self._clear_filters).grid(
+        ctk.CTkButton(actions, text="Clear bộ lọc", command=self._clear_filters, width=110).grid(
             row=0, column=2, sticky="w", padx=(10, 0)
         )
-        ttk.Label(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
-        ttk.Label(self, text="Log").grid(row=12, column=0, sticky="nw", pady=(8, 4))
-        self.log = tk.Text(self, height=14, wrap="word", state="disabled")
-        self.log.grid(row=13, column=0, columnspan=2, sticky="nsew")
+        ctk.CTkLabel(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
+        ctk.CTkLabel(self, text="Log").grid(row=12, column=0, sticky="nw", pady=(8, 4))
+        self.log = ctk.CTkTextbox(self, height=220, wrap="word")
+        self.log.configure(state="disabled")
+        self.log.grid(row=13, column=0, columnspan=3, sticky="nsew")
         self.rowconfigure(13, weight=1)
 
     def _build_select_org_layout(self) -> None:
         """Rich filter layout for Tab 2 (select-org), matching the DGTS website."""
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=1)
-        ttk.Label(self, text=self.header, font=("Segoe UI", 14, "bold")).grid(
+        ctk.CTkLabel(self, text=self.header, font=("Segoe UI", 16, "bold")).grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 14)
         )
         self._entry_field(1, 0, "Người có tài sản", self.select_org_owner_fullname, "Tên người có tài sản")
@@ -346,43 +352,44 @@ class CrawlerTab(ttk.Frame):
             1, 1, "Thời gian nộp hồ sơ", self.select_org_start_date, self.select_org_end_date
         )
         self.select_org_province_combo = self._combo_field(2, 0, "Tỉnh/Thành phố", self.select_org_province)
-        self.select_org_province_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_select_org_province_selected())
+        self.select_org_province_combo.configure(command=lambda _val: self._on_select_org_province_selected())
         self.select_org_district_combo = self._combo_field(2, 1, "Quận/Huyện", self.select_org_district)
         self.select_org_district_combo.configure(state="disabled")
         self.select_org_property_type_combo = self._combo_field(3, 0, "Loại tài sản", self.select_org_property_type)
         self._entry(4, "Số trang tối đa", self.max_pages, "Bỏ qua khi chọn crawl toàn bộ")
         self._entry(5, "Số bản ghi mỗi trang", self.page_size, "Mặc định 100 bản ghi để crawl nhanh hơn")
         self._entry(6, "Số luồng tải chi tiết", self.detail_workers, "Mặc định 5 luồng")
-        ttk.Checkbutton(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc", variable=self.crawl_all).grid(
-            row=7, column=0, columnspan=2, sticky="w", pady=8
+        ctk.CTkCheckBox(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc", variable=self.crawl_all).grid(
+            row=7, column=0, columnspan=3, sticky="w", pady=8
         )
         self._path_entry(8, "File lưu kết quả", self.output_path, self._browse_output)
         self._path_entry(9, "File DB lịch sử", self.history_db_path, self._browse_history_db)
-        ttk.Checkbutton(
+        ctk.CTkCheckBox(
             self,
             text="Lưu lịch sử và phát hiện thay đổi",
             variable=self.enable_history,
-        ).grid(row=10, column=0, columnspan=2, sticky="w", pady=8)
-        actions = ttk.Frame(self)
-        actions.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(16, 8))
+        ).grid(row=10, column=0, columnspan=3, sticky="w", pady=8)
+        actions = ctk.CTkFrame(self, fg_color="transparent")
+        actions.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(16, 8))
         actions.columnconfigure(2, weight=1)
-        self.run_button = ttk.Button(actions, text="Bắt đầu crawl", command=self._start_crawl)
+        self.run_button = ctk.CTkButton(actions, text="Bắt đầu crawl", command=self._start_crawl, width=120)
         self.run_button.grid(row=0, column=0, sticky="w")
-        self.stop_button = ttk.Button(actions, text="Dừng và xuất file", command=self._stop_crawl, state="disabled")
+        self.stop_button = ctk.CTkButton(actions, text="Dừng và xuất file", command=self._stop_crawl, state="disabled", width=140)
         self.stop_button.grid(row=0, column=1, sticky="w", padx=(10, 0))
-        ttk.Button(actions, text="Clear bộ lọc", command=self._clear_filters).grid(
+        ctk.CTkButton(actions, text="Clear bộ lọc", command=self._clear_filters, width=110).grid(
             row=0, column=2, sticky="w", padx=(10, 0)
         )
-        ttk.Label(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
-        ttk.Label(self, text="Log").grid(row=12, column=0, sticky="nw", pady=(8, 4))
-        self.log = tk.Text(self, height=14, wrap="word", state="disabled")
-        self.log.grid(row=13, column=0, columnspan=2, sticky="nsew")
+        ctk.CTkLabel(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
+        ctk.CTkLabel(self, text="Log").grid(row=12, column=0, sticky="nw", pady=(8, 4))
+        self.log = ctk.CTkTextbox(self, height=220, wrap="word")
+        self.log.configure(state="disabled")
+        self.log.grid(row=13, column=0, columnspan=3, sticky="nsew")
         self.rowconfigure(13, weight=1)
 
     def _build_auction_layout(self) -> None:
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=1)
-        ttk.Label(self, text=self.header, font=("Segoe UI", 14, "bold")).grid(
+        ctk.CTkLabel(self, text=self.header, font=("Segoe UI", 16, "bold")).grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 14)
         )
         self.auction_org_combo = self._combo_field(1, 0, "Tổ chức hành nghề đấu giá", self.auction_selected_org)
@@ -394,7 +401,7 @@ class CrawlerTab(ttk.Frame):
             2, 1, "Thời gian công khai việc đấu giá", self.auction_start_publish_date, self.auction_end_publish_date
         )
         self.auction_province_combo = self._combo_field(3, 0, "Tỉnh thành phố", self.auction_province)
-        self.auction_province_combo.bind("<<ComboboxSelected>>", lambda _event: self._on_auction_province_selected())
+        self.auction_province_combo.configure(command=lambda _val: self._on_auction_province_selected())
         self.auction_district_combo = self._combo_field(3, 1, "Quận/huyện", self.auction_district)
         self.auction_district_combo.configure(state="disabled")
         self._price_range_field(4, 0)
@@ -409,44 +416,45 @@ class CrawlerTab(ttk.Frame):
         self._entry(6, "Số trang tối đa", self.max_pages, "Bỏ qua khi chọn crawl toàn bộ")
         self._entry(7, "Số bản ghi mỗi trang", self.page_size, "Mặc định 100 bản ghi để crawl nhanh hơn")
         self._entry(8, "Số luồng tải chi tiết", self.detail_workers, "Mặc định 5 luồng")
-        ttk.Checkbutton(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc", variable=self.crawl_all).grid(
-            row=9, column=0, columnspan=2, sticky="w", pady=8
+        ctk.CTkCheckBox(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc", variable=self.crawl_all).grid(
+            row=9, column=0, columnspan=3, sticky="w", pady=8
         )
         self._path_entry(10, "File lưu kết quả", self.output_path, self._browse_output)
         self._path_entry(11, "File DB lịch sử", self.history_db_path, self._browse_history_db)
-        ttk.Checkbutton(
+        ctk.CTkCheckBox(
             self,
             text="Lưu lịch sử và phát hiện thay đổi",
             variable=self.enable_history,
-        ).grid(row=12, column=0, columnspan=2, sticky="w", pady=8)
+        ).grid(row=12, column=0, columnspan=3, sticky="w", pady=8)
 
-        actions = ttk.Frame(self)
-        actions.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(16, 8))
+        actions = ctk.CTkFrame(self, fg_color="transparent")
+        actions.grid(row=13, column=0, columnspan=3, sticky="ew", pady=(16, 8))
         actions.columnconfigure(2, weight=1)
-        self.run_button = ttk.Button(actions, text="Bắt đầu crawl", command=self._start_crawl)
+        self.run_button = ctk.CTkButton(actions, text="Bắt đầu crawl", command=self._start_crawl, width=120)
         self.run_button.grid(row=0, column=0, sticky="w")
-        self.stop_button = ttk.Button(actions, text="Dừng và xuất file", command=self._stop_crawl, state="disabled")
+        self.stop_button = ctk.CTkButton(actions, text="Dừng và xuất file", command=self._stop_crawl, state="disabled", width=140)
         self.stop_button.grid(row=0, column=1, sticky="w", padx=(10, 0))
-        ttk.Button(actions, text="Clear bộ lọc", command=self._clear_filters).grid(
+        ctk.CTkButton(actions, text="Clear bộ lọc", command=self._clear_filters, width=110).grid(
             row=0, column=2, sticky="w", padx=(10, 0)
         )
-        ttk.Label(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
+        ctk.CTkLabel(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
 
-        ttk.Label(self, text="Log").grid(row=14, column=0, sticky="nw", pady=(8, 4))
-        self.log = tk.Text(self, height=14, wrap="word", state="disabled")
-        self.log.grid(row=15, column=0, columnspan=2, sticky="nsew")
+        ctk.CTkLabel(self, text="Log").grid(row=14, column=0, sticky="nw", pady=(8, 4))
+        self.log = ctk.CTkTextbox(self, height=220, wrap="word")
+        self.log.configure(state="disabled")
+        self.log.grid(row=15, column=0, columnspan=3, sticky="nsew")
         self.rowconfigure(15, weight=1)
 
-    def _field_frame(self, row: int, column: int, label: str) -> ttk.Frame:
-        frame = ttk.Frame(self)
+    def _field_frame(self, row: int, column: int, label: str) -> ctk.CTkFrame:
+        frame = ctk.CTkFrame(self, fg_color="transparent")
         frame.grid(row=row, column=column, sticky="ew", padx=(0, 14) if column == 0 else (0, 0), pady=5)
         frame.columnconfigure(0, weight=1)
-        ttk.Label(frame, text=label).grid(row=0, column=0, sticky="w", pady=(0, 4))
+        ctk.CTkLabel(frame, text=label).grid(row=0, column=0, sticky="w", pady=(0, 4))
         return frame
 
-    def _entry_field(self, row: int, column: int, label: str, variable: tk.StringVar, placeholder: str) -> ttk.Entry:
+    def _entry_field(self, row: int, column: int, label: str, variable: tk.StringVar, placeholder: str) -> ctk.CTkEntry:
         frame = self._field_frame(row, column, label)
-        entry = ttk.Entry(frame, textvariable=variable)
+        entry = ctk.CTkEntry(frame, textvariable=variable, placeholder_text=placeholder)
         entry.grid(row=1, column=0, sticky="ew")
         return entry
 
@@ -457,9 +465,9 @@ class CrawlerTab(ttk.Frame):
         label: str,
         variable: tk.StringVar,
         values: list[str] | None = None,
-    ) -> ttk.Combobox:
+    ) -> ctk.CTkComboBox:
         frame = self._field_frame(row, column, label)
-        combo = ttk.Combobox(frame, textvariable=variable, state="readonly", values=values or ["Tất cả"])
+        combo = ctk.CTkComboBox(frame, variable=variable, state="readonly", values=values or ["Tất cả"])
         combo.grid(row=1, column=0, sticky="ew")
         return combo
 
@@ -476,12 +484,12 @@ class CrawlerTab(ttk.Frame):
         frame.columnconfigure(2, weight=1)
         start = self._inline_date_entry(frame, start_variable)
         start.grid(row=1, column=0, sticky="ew")
-        ttk.Label(frame, text="→").grid(row=1, column=1, padx=6)
+        ctk.CTkLabel(frame, text="→").grid(row=1, column=1, padx=6)
         end = self._inline_date_entry(frame, end_variable)
         end.grid(row=1, column=2, sticky="ew")
         return start, end
 
-    def _inline_date_entry(self, parent: ttk.Frame, variable: tk.StringVar) -> DateEntry:
+    def _inline_date_entry(self, parent: ctk.CTkFrame, variable: tk.StringVar) -> DateEntry:
         initial_value = variable.get().strip()
         parsed = datetime.strptime(initial_value, "%d/%m/%Y") if initial_value else datetime.now()
         entry = DateEntry(
@@ -494,6 +502,27 @@ class CrawlerTab(ttk.Frame):
             month=parsed.month,
             day=parsed.day,
         )
+        mode = ctk.get_appearance_mode()
+        if mode == "Dark":
+            entry.configure(
+                background="#343638",
+                foreground="white",
+                selectbackground="#1f538d",
+                selectforeground="white",
+                headersbackground="#2b2b2b",
+                headersforeground="white",
+                bordercolor="#565b5e"
+            )
+        else:
+            entry.configure(
+                background="#f9f9f9",
+                foreground="black",
+                selectbackground="#3b8ed0",
+                selectforeground="white",
+                headersbackground="#ebebeb",
+                headersforeground="black",
+                bordercolor="#dbdbdb"
+            )
         if not initial_value:
             entry.delete(0, "end")
             variable.set("")
@@ -503,9 +532,9 @@ class CrawlerTab(ttk.Frame):
         frame = self._field_frame(row, column, "Giá khởi điểm")
         frame.columnconfigure(0, weight=1)
         frame.columnconfigure(2, weight=1)
-        ttk.Entry(frame, textvariable=self.auction_from_price).grid(row=1, column=0, sticky="ew")
-        ttk.Label(frame, text="→").grid(row=1, column=1, padx=6)
-        ttk.Entry(frame, textvariable=self.auction_to_price).grid(row=1, column=2, sticky="ew")
+        ctk.CTkEntry(frame, textvariable=self.auction_from_price).grid(row=1, column=0, sticky="ew")
+        ctk.CTkLabel(frame, text="→").grid(row=1, column=1, padx=6)
+        ctk.CTkEntry(frame, textvariable=self.auction_to_price).grid(row=1, column=2, sticky="ew")
 
     def _load_initial_auction_options(self) -> None:
         def worker() -> None:
@@ -700,12 +729,12 @@ class CrawlerTab(ttk.Frame):
             combo.set("Tất cả")
 
     def _entry(self, row: int, label: str, variable: tk.StringVar, hint: str) -> None:
-        ttk.Label(self, text=label).grid(row=row, column=0, sticky="w", pady=5)
-        ttk.Entry(self, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=5)
-        ttk.Label(self, text=hint, foreground="#666666").grid(row=row, column=2, sticky="w", padx=(10, 0), pady=5)
+        ctk.CTkLabel(self, text=label).grid(row=row, column=0, sticky="w", pady=5)
+        ctk.CTkEntry(self, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=5)
+        ctk.CTkLabel(self, text=hint, text_color="#888888").grid(row=row, column=2, sticky="w", padx=(10, 0), pady=5)
 
     def _date_entry(self, row: int, label: str, variable: tk.StringVar) -> DateEntry:
-        ttk.Label(self, text=label).grid(row=row, column=0, sticky="w", pady=5)
+        ctk.CTkLabel(self, text=label).grid(row=row, column=0, sticky="w", pady=5)
         parsed = datetime.strptime(variable.get(), "%d/%m/%Y")
         entry = DateEntry(
             self,
@@ -717,20 +746,41 @@ class CrawlerTab(ttk.Frame):
             month=parsed.month,
             day=parsed.day,
         )
+        mode = ctk.get_appearance_mode()
+        if mode == "Dark":
+            entry.configure(
+                background="#343638",
+                foreground="white",
+                selectbackground="#1f538d",
+                selectforeground="white",
+                headersbackground="#2b2b2b",
+                headersforeground="white",
+                bordercolor="#565b5e"
+            )
+        else:
+            entry.configure(
+                background="#f9f9f9",
+                foreground="black",
+                selectbackground="#3b8ed0",
+                selectforeground="white",
+                headersbackground="#ebebeb",
+                headersforeground="black",
+                bordercolor="#dbdbdb"
+            )
         entry.grid(row=row, column=1, sticky="w", pady=5)
-        ttk.Label(self, text="Chọn từ lịch", foreground="#666666").grid(
+        ctk.CTkLabel(self, text="Chọn từ lịch", text_color="#888888").grid(
             row=row, column=2, sticky="w", padx=(10, 0), pady=5
         )
         return entry
 
     def _preset_buttons(self, row: int) -> None:
-        ttk.Label(self, text="Chọn nhanh").grid(row=row, column=0, sticky="w", pady=5)
-        buttons = ttk.Frame(self)
+        ctk.CTkLabel(self, text="Chọn nhanh").grid(row=row, column=0, sticky="w", pady=5)
+        buttons = ctk.CTkFrame(self, fg_color="transparent")
         buttons.grid(row=row, column=1, sticky="w", pady=5)
-        ttk.Button(buttons, text="7 ngày gần nhất", command=self._set_last_7_days).pack(side="left")
-        ttk.Button(buttons, text="Hôm qua", command=self._set_yesterday).pack(side="left", padx=(8, 0))
-        ttk.Button(buttons, text="Hôm nay", command=self._set_today).pack(side="left", padx=(8, 0))
-        ttk.Label(self, text="Mặc định là 7 ngày gần nhất", foreground="#666666").grid(
+        ctk.CTkButton(buttons, text="7 ngày gần nhất", command=self._set_last_7_days, height=28, width=110).pack(side="left")
+        ctk.CTkButton(buttons, text="Hôm qua", command=self._set_yesterday, height=28, width=80).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(buttons, text="Hôm nay", command=self._set_today, height=28, width=80).pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(self, text="Mặc định là 7 ngày gần nhất", text_color="#888888").grid(
             row=row, column=2, sticky="w", padx=(10, 0), pady=5
         )
 
@@ -755,9 +805,9 @@ class CrawlerTab(ttk.Frame):
         self._set_date_range(today, today)
 
     def _path_entry(self, row: int, label: str, variable: tk.StringVar, command: object) -> None:
-        ttk.Label(self, text=label).grid(row=row, column=0, sticky="w", pady=5)
-        ttk.Entry(self, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=5)
-        ttk.Button(self, text="Chọn...", command=command).grid(row=row, column=2, sticky="ew", padx=(10, 0), pady=5)
+        ctk.CTkLabel(self, text=label).grid(row=row, column=0, sticky="w", pady=5)
+        ctk.CTkEntry(self, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=5)
+        ctk.CTkButton(self, text="Chọn...", command=command, width=80).grid(row=row, column=2, sticky="ew", padx=(10, 0), pady=5)
 
     def _browse_output(self) -> None:
         path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")])
@@ -1022,9 +1072,9 @@ class CrawlerTab(ttk.Frame):
         self.crawl_all.set(False)
 
 
-class HistoryTab(ttk.Frame):
-    def __init__(self, parent: ttk.Notebook) -> None:
-        super().__init__(parent, padding=16)
+class HistoryTab(ctk.CTkFrame):
+    def __init__(self, parent: ctk.CTkFrame) -> None:
+        super().__init__(parent, fg_color="transparent")
         self.history_db_path = tk.StringVar(value=str(Path("outputs") / "dgts_history.sqlite"))
         self.notice_kind_label = tk.StringVar(value="Tất cả")
         self.event_label = tk.StringVar(value="Tất cả")
@@ -1038,39 +1088,78 @@ class HistoryTab(ttk.Frame):
         self.columnconfigure(1, weight=1)
         self.rowconfigure(5, weight=1)
 
-        ttk.Label(self, text="Lịch sử thay đổi", font=("Segoe UI", 14, "bold")).grid(
+        ctk.CTkLabel(self, text="Lịch sử thay đổi", font=("Segoe UI", 16, "bold")).grid(
             row=0, column=0, columnspan=4, sticky="w", pady=(0, 14)
         )
-        ttk.Label(self, text="File DB lịch sử").grid(row=1, column=0, sticky="w", pady=5)
-        ttk.Entry(self, textvariable=self.history_db_path).grid(row=1, column=1, sticky="ew", pady=5)
-        ttk.Button(self, text="Chọn...", command=self._browse_history_db).grid(
+        ctk.CTkLabel(self, text="File DB lịch sử").grid(row=1, column=0, sticky="w", pady=5)
+        ctk.CTkEntry(self, textvariable=self.history_db_path).grid(row=1, column=1, sticky="ew", pady=5)
+        ctk.CTkButton(self, text="Chọn...", command=self._browse_history_db, width=80).grid(
             row=1, column=2, sticky="ew", padx=(10, 0), pady=5
         )
 
-        ttk.Label(self, text="Loại tin").grid(row=2, column=0, sticky="w", pady=5)
-        ttk.Combobox(
+        ctk.CTkLabel(self, text="Loại tin").grid(row=2, column=0, sticky="w", pady=5)
+        ctk.CTkComboBox(
             self,
-            textvariable=self.notice_kind_label,
+            variable=self.notice_kind_label,
             values=list(NOTICE_KIND_OPTIONS),
             state="readonly",
-            width=28,
+            width=180,
         ).grid(row=2, column=1, sticky="w", pady=5)
-        ttk.Label(self, text="Sự kiện").grid(row=2, column=2, sticky="e", padx=(10, 0), pady=5)
-        ttk.Combobox(
+        ctk.CTkLabel(self, text="Sự kiện").grid(row=2, column=2, sticky="e", padx=(10, 0), pady=5)
+        ctk.CTkComboBox(
             self,
-            textvariable=self.event_label,
+            variable=self.event_label,
             values=list(EVENT_OPTIONS),
             state="readonly",
-            width=18,
+            width=140,
         ).grid(row=2, column=3, sticky="w", padx=(10, 0), pady=5)
 
-        actions = ttk.Frame(self)
+        actions = ctk.CTkFrame(self, fg_color="transparent")
         actions.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(12, 8))
-        ttk.Button(actions, text="Tải lịch sử", command=self._reset_and_load_history).pack(side="left")
-        ttk.Button(actions, text="Trang trước", command=self._previous_page).pack(side="left", padx=(10, 0))
-        ttk.Button(actions, text="Trang sau", command=self._next_page).pack(side="left", padx=(10, 0))
-        ttk.Button(actions, text="Xuất Excel", command=self._export_excel).pack(side="left", padx=(10, 0))
-        ttk.Label(actions, textvariable=self.status).pack(side="right")
+        ctk.CTkButton(actions, text="Tải lịch sử", command=self._reset_and_load_history, width=110).pack(side="left")
+        ctk.CTkButton(actions, text="Trang trước", command=self._previous_page, width=100).pack(side="left", padx=(10, 0))
+        ctk.CTkButton(actions, text="Trang sau", command=self._next_page, width=100).pack(side="left", padx=(10, 0))
+        ctk.CTkButton(actions, text="Xuất Excel", command=self._export_excel, width=100).pack(side="left", padx=(10, 0))
+        ctk.CTkLabel(actions, textvariable=self.status).pack(side="right")
+
+        # Style standard ttk Treeview to match light/dark appearance mode
+        style = ttk.Style()
+        mode = ctk.get_appearance_mode()
+        style.theme_use("default")
+        if mode == "Dark":
+            style.configure(
+                "Treeview",
+                background="#2a2a2a",
+                foreground="white",
+                fieldbackground="#2a2a2a",
+                borderwidth=0,
+                font=("Segoe UI", 10),
+            )
+            style.map("Treeview", background=[("selected", "#1f538d")])
+            style.configure(
+                "Treeview.Heading",
+                background="#333333",
+                foreground="white",
+                borderwidth=0,
+                font=("Segoe UI", 10, "bold"),
+            )
+        else:
+            style.configure(
+                "Treeview",
+                background="#ffffff",
+                foreground="black",
+                fieldbackground="#ffffff",
+                borderwidth=0,
+                font=("Segoe UI", 10),
+            )
+            style.map("Treeview", background=[("selected", "#3b8ed0")])
+            style.configure(
+                "Treeview.Heading",
+                background="#ebebeb",
+                foreground="black",
+                borderwidth=0,
+                font=("Segoe UI", 10, "bold"),
+            )
 
         columns = (
             "created_at",
@@ -1210,7 +1299,7 @@ class HistoryTab(ttk.Frame):
         messagebox.showinfo("Hoàn tất", f"Đã xuất: {output}")
 
 
-class CrawlerApp(tk.Tk):
+class CrawlerApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("DGTS Crawler")
@@ -1220,20 +1309,27 @@ class CrawlerApp(tk.Tk):
         self._build_layout()
 
     def _build_layout(self) -> None:
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill="both", expand=True)
+        tabview = ctk.CTkTabview(self)
+        tabview.pack(fill="both", expand=True, padx=10, pady=10)
 
         for config in TAB_CONFIGS:
+            tabview.add(config.tab_label)
+        tabview.add(HISTORY_TAB_LABEL)
+
+        for config in TAB_CONFIGS:
+            tab_parent = tabview.tab(config.tab_label)
             tab = CrawlerTab(
-                notebook,
+                tab_parent,
                 config.notice_kind,
                 config.output_default,
                 config.header,
                 config.tab_label,
                 self.run_coordinator,
             )
-            notebook.add(tab, text=config.tab_label)
-        notebook.add(HistoryTab(notebook), text=HISTORY_TAB_LABEL)
+            tab.pack(fill="both", expand=True)
+
+        history = HistoryTab(tabview.tab(HISTORY_TAB_LABEL))
+        history.pack(fill="both", expand=True)
 
 
 def main() -> None:
