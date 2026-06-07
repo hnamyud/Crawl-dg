@@ -37,6 +37,31 @@ class AuctionFilters:
 
 
 @dataclass(frozen=True)
+class SelectOrgFilters:
+    owner_fullname: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    start_publish_date: str = ""
+    end_publish_date: str = ""
+    province_id: str = ""
+    district_id: str = ""
+    property_type_id: str = ""
+    notice_sub: str = ""
+
+
+@dataclass(frozen=True)
+class SelectOrgResultFilters:
+    owner_fullname: str = ""
+    org_id: str = ""
+    publish_start_date: str = ""
+    publish_end_date: str = ""
+    province_id: str = ""
+    district_id: str = ""
+    property_type_id: str = ""
+    notice_sub: str = ""
+
+
+@dataclass(frozen=True)
 class CrawlerConfig:
     from_date: str = ""
     to_date: str = ""
@@ -49,6 +74,8 @@ class CrawlerConfig:
     history_db_path: Path = Path("outputs") / "dgts_history.sqlite"
     enable_history: bool = True
     auction_filters: AuctionFilters = AuctionFilters()
+    select_org_filters: SelectOrgFilters = SelectOrgFilters()
+    select_org_result_filters: SelectOrgResultFilters = SelectOrgResultFilters()
 
 
 def run_crawl(
@@ -143,6 +170,7 @@ def _run_select_org_crawl(
         end_date=end_date,
         page_size=config.page_size,
         max_pages=None if config.crawl_all else config.max_pages,
+        filters=_select_org_filters_for_run(config, start_date, end_date),
     )
 
     def fetch_notice(notice: dict) -> tuple[list[AuctionRow], HistorySnapshot | None]:
@@ -203,6 +231,7 @@ def _run_select_org_result_crawl(
         end_date=end_date,
         page_size=config.page_size,
         max_pages=None if config.crawl_all else config.max_pages,
+        filters=_select_org_result_filters_for_run(config),
     )
 
     def fetch_notice(notice: dict) -> tuple[list[AuctionRow], HistorySnapshot | None]:
@@ -276,6 +305,35 @@ def resolve_dates(config: CrawlerConfig, today: datetime | None = None) -> tuple
     return (
         format_date_arg(config.from_date) if config.from_date else default_start.strftime("%d/%m/%Y"),
         format_date_arg(config.to_date) if config.to_date else today.strftime("%d/%m/%Y"),
+    )
+
+
+def _select_org_result_filters_for_run(config: CrawlerConfig) -> SelectOrgResultFilters:
+    filters = config.select_org_result_filters
+    return SelectOrgResultFilters(
+        owner_fullname=filters.owner_fullname,
+        org_id=filters.org_id,
+        publish_start_date=format_date_arg(filters.publish_start_date),
+        publish_end_date=format_date_arg(filters.publish_end_date),
+        province_id=filters.province_id,
+        district_id=filters.district_id,
+        property_type_id=filters.property_type_id,
+        notice_sub=filters.notice_sub,
+    )
+
+
+def _select_org_filters_for_run(config: CrawlerConfig, start_date: str, end_date: str) -> SelectOrgFilters:
+    filters = config.select_org_filters
+    return SelectOrgFilters(
+        owner_fullname=filters.owner_fullname,
+        start_date=format_date_arg(filters.start_date) or start_date,
+        end_date=format_date_arg(filters.end_date) or end_date,
+        start_publish_date=format_date_arg(filters.start_publish_date),
+        end_publish_date=format_date_arg(filters.end_publish_date),
+        province_id=filters.province_id,
+        district_id=filters.district_id,
+        property_type_id=filters.property_type_id,
+        notice_sub=filters.notice_sub,
     )
 
 

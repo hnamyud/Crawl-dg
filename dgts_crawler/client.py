@@ -57,11 +57,15 @@ class DGTSCrawlerClient:
         payload = self._get_json("/common/getOrgByCityID", {"cityID": province_id})
         return payload if isinstance(payload, list) else []
 
-    def search_select_org_page(self, page: int, page_size: int, start_date: str = "", end_date: str = "") -> dict[str, Any]:
-        params = {
-            "p": page,
-            "numberPerPage": page_size,
-        }
+    def search_select_org_page(
+        self,
+        page: int,
+        page_size: int,
+        start_date: str = "",
+        end_date: str = "",
+        filters: Any | None = None,
+    ) -> dict[str, Any]:
+        params = _select_org_search_params(page, page_size, start_date, end_date, filters)
         return self._get_json("/ThongTin/getInfoSelectAuctionOrg", params)
 
     def search_select_org_result_page(
@@ -70,11 +74,9 @@ class DGTSCrawlerClient:
         page_size: int,
         start_date: str = "",
         end_date: str = "",
+        filters: Any | None = None,
     ) -> dict[str, Any]:
-        params = {
-            "p": page,
-            "numberPerPage": page_size,
-        }
+        params = _select_org_result_search_params(page, page_size, filters)
         return self._get_json("/ThongTin/getResultSelectAuctionOrg", params)
 
     def iter_notices(
@@ -110,11 +112,12 @@ class DGTSCrawlerClient:
         end_date: str = "",
         page_size: int = 100,
         max_pages: int | None = None,
+        filters: Any | None = None,
     ) -> Iterator[dict[str, Any]]:
         page = 1
         seen: set[Any] = set()
         while True:
-            payload = self.search_select_org_page(page, page_size, start_date, end_date)
+            payload = self.search_select_org_page(page, page_size, start_date, end_date, filters)
             should_stop_by_date = False
             for item in payload.get("items") or []:
                 notice_id = item.get("id")
@@ -145,28 +148,27 @@ class DGTSCrawlerClient:
         end_date: str = "",
         page_size: int = 100,
         max_pages: int | None = None,
+        filters: Any | None = None,
     ) -> Iterator[dict[str, Any]]:
+        # publishTime is not sorted on the server, so we cannot early-stop.
+        # We do a client-side filter on publishTime across all pages up to max_pages.
+        publish_start = _filter_value(filters, "publish_start_date") or start_date
+        publish_end = _filter_value(filters, "publish_end_date") or end_date
         page = 1
         seen: set[Any] = set()
         while True:
-            payload = self.search_select_org_result_page(page, page_size, start_date, end_date)
-            should_stop_by_date = False
+            payload = self.search_select_org_result_page(page, page_size, start_date, end_date, filters)
             for item in payload.get("items") or []:
                 notice_id = item.get("id")
                 if notice_id in seen:
                     continue
-                date_state = _date_filter_state(item.get("publishTime") or item.get("lastUpdated"), start_date, end_date)
-                if date_state == "newer":
+                date_state = _date_filter_state(item.get("publishTime"), publish_start, publish_end)
+                if date_state in ("newer", "older"):
                     continue
-                if date_state == "older":
-                    should_stop_by_date = True
-                    break
                 seen.add(notice_id)
                 yield item
 
             page_count = int(payload.get("pageCount") or page)
-            if should_stop_by_date:
-                break
             if page >= page_count:
                 break
             if max_pages is not None and page >= max_pages:
@@ -220,6 +222,35 @@ def _date_filter_state(value: Any, start_date: str, end_date: str) -> str:
     if start_date and public_date < datetime.strptime(start_date, "%d/%m/%Y"):
         return "older"
     return "in-range"
+
+
+def _select_org_result_search_params(page: int, page_size: int, filters: Any | None) -> dict[str, Any]:
+    return {
+        "p": page,
+        "numberPerPage": page_size,
+        "ownerFullname": _filter_value(filters, "owner_fullname"),
+        "orgID": _filter_value(filters, "org_id"),
+        "province": _filter_value(filters, "province_id"),
+        "district": _filter_value(filters, "district_id"),
+        "propertyTypeId": _filter_value(filters, "property_type_id"),
+        "noticeSub": _filter_value(filters, "notice_sub"),
+    }
+
+
+def _select_org_search_params(page: int, page_size: int, start_date: str, end_date: str, filters: Any | None) -> dict[str, Any]:
+    return {
+        "p": page,
+        "numberPerPage": page_size,
+        "ownerFullname": _filter_value(filters, "owner_fullname"),
+        "startDate": _filter_value(filters, "start_date") or start_date,
+        "endDate": _filter_value(filters, "end_date") or end_date,
+        "startPublishDate": _filter_value(filters, "start_publish_date"),
+        "endPublishDate": _filter_value(filters, "end_publish_date"),
+        "province": _filter_value(filters, "province_id"),
+        "district": _filter_value(filters, "district_id"),
+        "propertyTypeId": _filter_value(filters, "property_type_id"),
+        "noticeSub": _filter_value(filters, "notice_sub"),
+    }
 
 
 def _auction_search_params(page: int, page_size: int, start_date: str, end_date: str, filters: Any | None) -> dict[str, Any]:

@@ -13,7 +13,7 @@ from tkcalendar import DateEntry
 from .client import DGTSCrawlerClient
 from .history_report import write_history_report
 from .history_store import HistoryEventRow, HistoryStore
-from .runner import AuctionFilters, CrawlerConfig, run_crawl, validate_config
+from .runner import AuctionFilters, CrawlerConfig, SelectOrgFilters, SelectOrgResultFilters, run_crawl, validate_config
 
 
 @dataclass(frozen=True)
@@ -154,6 +154,7 @@ class CrawlerTab(ttk.Frame):
         today = datetime.now()
         self.from_date = tk.StringVar(value=(today - timedelta(days=7)).strftime("%d/%m/%Y"))
         self.to_date = tk.StringVar(value=today.strftime("%d/%m/%Y"))
+        # --- Auction (Tab 1) filter vars ---
         self.auction_start_date = tk.StringVar(value="")
         self.auction_end_date = tk.StringVar(value="")
         self.auction_start_publish_date = tk.StringVar(value=self.from_date.get())
@@ -171,6 +172,42 @@ class CrawlerTab(ttk.Frame):
         self._auction_district_options: dict[str, str] = {"Tất cả": ""}
         self._auction_property_type_options: dict[str, str] = {"Tất cả": ""}
         self._auction_option_events: queue.Queue[tuple[str, object]] = queue.Queue()
+        # --- Select-Org (Tab 2) filter vars ---
+        self.select_org_owner_fullname = tk.StringVar(value="")
+        self.select_org_start_date = tk.StringVar(value="")
+        self.select_org_end_date = tk.StringVar(value="")
+        self.select_org_province = tk.StringVar(value="Tất cả")
+        self.select_org_district = tk.StringVar(value="Tất cả")
+        self.select_org_property_type = tk.StringVar(value="Tất cả")
+        self._select_org_province_options: dict[str, str] = {"Tất cả": ""}
+        self._select_org_district_options: dict[str, str] = {"Tất cả": ""}
+        self._select_org_property_type_options: dict[str, str] = {"Tất cả": ""}
+        self._select_org_option_events: queue.Queue[tuple[str, object]] = queue.Queue()
+        self.select_org_start_date_picker: DateEntry | None = None
+        self.select_org_end_date_picker: DateEntry | None = None
+        self.select_org_province_combo: ttk.Combobox | None = None
+        self.select_org_district_combo: ttk.Combobox | None = None
+        self.select_org_property_type_combo: ttk.Combobox | None = None
+        # --- Select-Org-Result (Tab 3) filter vars ---
+        self.result_owner_fullname = tk.StringVar(value="")
+        self.result_org = tk.StringVar(value="Tất cả")
+        self.result_publish_start_date = tk.StringVar(value="")
+        self.result_publish_end_date = tk.StringVar(value="")
+        self.result_province = tk.StringVar(value="Tất cả")
+        self.result_district = tk.StringVar(value="Tất cả")
+        self.result_property_type = tk.StringVar(value="Tất cả")
+        self._result_org_options: dict[str, str] = {"Tất cả": ""}
+        self._result_province_options: dict[str, str] = {"Tất cả": ""}
+        self._result_district_options: dict[str, str] = {"Tất cả": ""}
+        self._result_property_type_options: dict[str, str] = {"Tất cả": ""}
+        self._result_option_events: queue.Queue[tuple[str, object]] = queue.Queue()
+        self.result_publish_start_picker: DateEntry | None = None
+        self.result_publish_end_picker: DateEntry | None = None
+        self.result_org_combo: ttk.Combobox | None = None
+        self.result_province_combo: ttk.Combobox | None = None
+        self.result_district_combo: ttk.Combobox | None = None
+        self.result_property_type_combo: ttk.Combobox | None = None
+        # --- Shared ---
         self.max_pages = tk.StringVar(value="10")
         self.page_size = tk.StringVar(value=DEFAULT_UI_PAGE_SIZE)
         self.detail_workers = tk.StringVar(value=DEFAULT_DETAIL_WORKERS)
@@ -197,12 +234,24 @@ class CrawlerTab(ttk.Frame):
         self._build_layout()
         if self.notice_kind == "auction":
             self._load_initial_auction_options()
+        elif self.notice_kind == "select-org":
+            self._load_initial_select_org_options()
+        elif self.notice_kind == "select-org-result":
+            self._load_initial_result_options()
         self.after(250, self._drain_events)
 
     def _build_layout(self) -> None:
         if self.notice_kind == "auction":
             self._build_auction_layout()
-            return
+        elif self.notice_kind == "select-org":
+            self._build_select_org_layout()
+        elif self.notice_kind == "select-org-result":
+            self._build_select_org_result_layout()
+        else:
+            self._build_simple_layout()
+
+    def _build_simple_layout(self) -> None:
+        """Simple date-range-only layout used by Tab 3 (select-org-result)."""
         self.columnconfigure(1, weight=1)
         ttk.Label(self, text=self.header, font=("Segoe UI", 14, "bold")).grid(
             row=0, column=0, columnspan=3, sticky="w", pady=(0, 14)
@@ -213,11 +262,9 @@ class CrawlerTab(ttk.Frame):
         self._entry(4, "Số trang tối đa", self.max_pages, "Bỏ qua khi chọn crawl toàn bộ")
         self._entry(5, "Số bản ghi mỗi trang", self.page_size, "Mặc định 100 bản ghi để crawl nhanh hơn")
         self._entry(6, "Số luồng tải chi tiết", self.detail_workers, "Mặc định 5 luồng")
-
         ttk.Checkbutton(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc ngày", variable=self.crawl_all).grid(
             row=7, column=1, sticky="w", pady=8
         )
-
         self._path_entry(8, "File lưu kết quả", self.output_path, self._browse_output)
         self._path_entry(9, "File DB lịch sử", self.history_db_path, self._browse_history_db)
         ttk.Checkbutton(
@@ -225,7 +272,6 @@ class CrawlerTab(ttk.Frame):
             text="Lưu lịch sử và phát hiện thay đổi",
             variable=self.enable_history,
         ).grid(row=10, column=1, sticky="w", pady=8)
-
         actions = ttk.Frame(self)
         actions.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(16, 8))
         actions.columnconfigure(2, weight=1)
@@ -237,10 +283,100 @@ class CrawlerTab(ttk.Frame):
             row=0, column=2, sticky="w", padx=(10, 0)
         )
         ttk.Label(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
-
         ttk.Label(self, text="Log").grid(row=12, column=0, sticky="nw", pady=(8, 4))
         self.log = tk.Text(self, height=14, wrap="word", state="disabled")
         self.log.grid(row=13, column=0, columnspan=3, sticky="nsew")
+        self.rowconfigure(13, weight=1)
+
+    def _build_select_org_result_layout(self) -> None:
+        """Rich filter layout for Tab 3 (select-org-result), matching the DGTS website."""
+        self.columnconfigure(0, weight=1)
+        self.columnconfigure(1, weight=1)
+        ttk.Label(self, text=self.header, font=("Segoe UI", 14, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 14)
+        )
+        self._entry_field(1, 0, "Người có tài sản", self.result_owner_fullname, "Tên người có tài sản")
+        self.result_org_combo = self._combo_field(1, 1, "Tên Tổ chức", self.result_org)
+        self.result_province_combo = self._combo_field(2, 0, "Tỉnh/Thành phố", self.result_province)
+        self.result_province_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_result_province_selected())
+        self.result_district_combo = self._combo_field(2, 1, "Quận/Huyện", self.result_district)
+        self.result_district_combo.configure(state="disabled")
+        self.result_property_type_combo = self._combo_field(3, 0, "Loại tài sản", self.result_property_type)
+        self.result_publish_start_picker, self.result_publish_end_picker = self._date_range_field(
+            3, 1, "Ngày công khai (từ → đến)", self.result_publish_start_date, self.result_publish_end_date
+        )
+        self._entry(4, "Số trang tối đa", self.max_pages, "Bỏ qua khi chọn crawl toàn bộ")
+        self._entry(5, "Số bản ghi mỗi trang", self.page_size, "Mặc định 100 bản ghi để crawl nhanh hơn")
+        self._entry(6, "Số luồng tải chi tiết", self.detail_workers, "Mặc định 5 luồng")
+        ttk.Checkbutton(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc", variable=self.crawl_all).grid(
+            row=7, column=0, columnspan=2, sticky="w", pady=8
+        )
+        self._path_entry(8, "File lưu kết quả", self.output_path, self._browse_output)
+        self._path_entry(9, "File DB lịch sử", self.history_db_path, self._browse_history_db)
+        ttk.Checkbutton(
+            self,
+            text="Lưu lịch sử và phát hiện thay đổi",
+            variable=self.enable_history,
+        ).grid(row=10, column=0, columnspan=2, sticky="w", pady=8)
+        actions = ttk.Frame(self)
+        actions.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(16, 8))
+        actions.columnconfigure(2, weight=1)
+        self.run_button = ttk.Button(actions, text="Bắt đầu crawl", command=self._start_crawl)
+        self.run_button.grid(row=0, column=0, sticky="w")
+        self.stop_button = ttk.Button(actions, text="Dừng và xuất file", command=self._stop_crawl, state="disabled")
+        self.stop_button.grid(row=0, column=1, sticky="w", padx=(10, 0))
+        ttk.Button(actions, text="Clear bộ lọc", command=self._clear_filters).grid(
+            row=0, column=2, sticky="w", padx=(10, 0)
+        )
+        ttk.Label(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
+        ttk.Label(self, text="Log").grid(row=12, column=0, sticky="nw", pady=(8, 4))
+        self.log = tk.Text(self, height=14, wrap="word", state="disabled")
+        self.log.grid(row=13, column=0, columnspan=2, sticky="nsew")
+        self.rowconfigure(13, weight=1)
+
+    def _build_select_org_layout(self) -> None:
+        """Rich filter layout for Tab 2 (select-org), matching the DGTS website."""
+        self.columnconfigure(0, weight=1)
+        self.columnconfigure(1, weight=1)
+        ttk.Label(self, text=self.header, font=("Segoe UI", 14, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 14)
+        )
+        self._entry_field(1, 0, "Người có tài sản", self.select_org_owner_fullname, "Tên người có tài sản")
+        self.select_org_start_date_picker, self.select_org_end_date_picker = self._date_range_field(
+            1, 1, "Thời gian nộp hồ sơ", self.select_org_start_date, self.select_org_end_date
+        )
+        self.select_org_province_combo = self._combo_field(2, 0, "Tỉnh/Thành phố", self.select_org_province)
+        self.select_org_province_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_select_org_province_selected())
+        self.select_org_district_combo = self._combo_field(2, 1, "Quận/Huyện", self.select_org_district)
+        self.select_org_district_combo.configure(state="disabled")
+        self.select_org_property_type_combo = self._combo_field(3, 0, "Loại tài sản", self.select_org_property_type)
+        self._entry(4, "Số trang tối đa", self.max_pages, "Bỏ qua khi chọn crawl toàn bộ")
+        self._entry(5, "Số bản ghi mỗi trang", self.page_size, "Mặc định 100 bản ghi để crawl nhanh hơn")
+        self._entry(6, "Số luồng tải chi tiết", self.detail_workers, "Mặc định 5 luồng")
+        ttk.Checkbutton(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc", variable=self.crawl_all).grid(
+            row=7, column=0, columnspan=2, sticky="w", pady=8
+        )
+        self._path_entry(8, "File lưu kết quả", self.output_path, self._browse_output)
+        self._path_entry(9, "File DB lịch sử", self.history_db_path, self._browse_history_db)
+        ttk.Checkbutton(
+            self,
+            text="Lưu lịch sử và phát hiện thay đổi",
+            variable=self.enable_history,
+        ).grid(row=10, column=0, columnspan=2, sticky="w", pady=8)
+        actions = ttk.Frame(self)
+        actions.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(16, 8))
+        actions.columnconfigure(2, weight=1)
+        self.run_button = ttk.Button(actions, text="Bắt đầu crawl", command=self._start_crawl)
+        self.run_button.grid(row=0, column=0, sticky="w")
+        self.stop_button = ttk.Button(actions, text="Dừng và xuất file", command=self._stop_crawl, state="disabled")
+        self.stop_button.grid(row=0, column=1, sticky="w", padx=(10, 0))
+        ttk.Button(actions, text="Clear bộ lọc", command=self._clear_filters).grid(
+            row=0, column=2, sticky="w", padx=(10, 0)
+        )
+        ttk.Label(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
+        ttk.Label(self, text="Log").grid(row=12, column=0, sticky="nw", pady=(8, 4))
+        self.log = tk.Text(self, height=14, wrap="word", state="disabled")
+        self.log.grid(row=13, column=0, columnspan=2, sticky="nsew")
         self.rowconfigure(13, weight=1)
 
     def _build_auction_layout(self) -> None:
@@ -419,6 +555,62 @@ class CrawlerTab(ttk.Frame):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _load_initial_select_org_options(self) -> None:
+        def worker() -> None:
+            try:
+                client = DGTSCrawlerClient()
+                self._select_org_option_events.put(
+                    (
+                        "initial",
+                        {
+                            "provinces": client.list_provinces(),
+                            "property_types": client.list_property_types(),
+                        },
+                    )
+                )
+            except Exception as exc:
+                self._select_org_option_events.put(("error", f"Không tải được bộ lọc Tab 2: {exc}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_select_org_province_selected(self) -> None:
+        province_id = self._select_org_province_options.get(self.select_org_province.get(), "")
+        self.select_org_district.set("Tất cả")
+        self._select_org_district_options = {"Tất cả": ""}
+        self._set_combo_values(self.select_org_district_combo, self._select_org_district_options)
+        if self.select_org_district_combo:
+            self.select_org_district_combo.configure(state="disabled" if not province_id else "readonly")
+        if not province_id:
+            return
+
+        def worker() -> None:
+            try:
+                client = DGTSCrawlerClient()
+                self._select_org_option_events.put(
+                    ("province", {"districts": client.list_districts(province_id)})
+                )
+            except Exception as exc:
+                self._select_org_option_events.put(("error", f"Không tải được quận/huyện Tab 2: {exc}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _drain_select_org_option_events(self) -> None:
+        while True:
+            try:
+                kind, payload = self._select_org_option_events.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "error":
+                self._append_log(str(payload))
+            elif kind == "initial" and isinstance(payload, dict):
+                self._select_org_province_options = _option_map(payload.get("provinces") or [], "name")
+                self._select_org_property_type_options = _option_map(payload.get("property_types") or [], "name")
+                self._set_combo_values(self.select_org_province_combo, self._select_org_province_options)
+                self._set_combo_values(self.select_org_property_type_combo, self._select_org_property_type_options)
+            elif kind == "province" and isinstance(payload, dict):
+                self._select_org_district_options = _option_map(payload.get("districts") or [], "name")
+                self._set_combo_values(self.select_org_district_combo, self._select_org_district_options)
+
     def _drain_auction_option_events(self) -> None:
         while True:
             try:
@@ -439,6 +631,65 @@ class CrawlerTab(ttk.Frame):
                 self._auction_org_options = _option_map(payload.get("orgs") or [], "fullname")
                 self._set_combo_values(self.auction_district_combo, self._auction_district_options)
                 self._set_combo_values(self.auction_org_combo, self._auction_org_options)
+
+    def _load_initial_result_options(self) -> None:
+        def worker() -> None:
+            try:
+                client = DGTSCrawlerClient()
+                self._result_option_events.put(
+                    (
+                        "initial",
+                        {
+                            "provinces": client.list_provinces(),
+                            "property_types": client.list_property_types(),
+                            "orgs": client.list_auction_orgs(),
+                        },
+                    )
+                )
+            except Exception as exc:
+                self._result_option_events.put(("error", f"Không tải được bộ lọc Tab 3: {exc}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_result_province_selected(self) -> None:
+        province_id = self._result_province_options.get(self.result_province.get(), "")
+        self.result_district.set("Tất cả")
+        self._result_district_options = {"Tất cả": ""}
+        self._set_combo_values(self.result_district_combo, self._result_district_options)
+        if self.result_district_combo:
+            self.result_district_combo.configure(state="disabled" if not province_id else "readonly")
+        if not province_id:
+            return
+
+        def worker() -> None:
+            try:
+                client = DGTSCrawlerClient()
+                self._result_option_events.put(
+                    ("province", {"districts": client.list_districts(province_id)})
+                )
+            except Exception as exc:
+                self._result_option_events.put(("error", f"Không tải được quận/huyện Tab 3: {exc}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _drain_result_option_events(self) -> None:
+        while True:
+            try:
+                kind, payload = self._result_option_events.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "error":
+                self._append_log(str(payload))
+            elif kind == "initial" and isinstance(payload, dict):
+                self._result_province_options = _option_map(payload.get("provinces") or [], "name")
+                self._result_property_type_options = _option_map(payload.get("property_types") or [], "name")
+                self._result_org_options = _option_map(payload.get("orgs") or [], "fullname")
+                self._set_combo_values(self.result_province_combo, self._result_province_options)
+                self._set_combo_values(self.result_property_type_combo, self._result_property_type_options)
+                self._set_combo_values(self.result_org_combo, self._result_org_options)
+            elif kind == "province" and isinstance(payload, dict):
+                self._result_district_options = _option_map(payload.get("districts") or [], "name")
+                self._set_combo_values(self.result_district_combo, self._result_district_options)
 
     def _set_combo_values(self, combo: ttk.Combobox | None, options: dict[str, str]) -> None:
         if combo is None:
@@ -566,6 +817,9 @@ class CrawlerTab(ttk.Frame):
         if self.notice_kind == "auction":
             from_date = self.auction_start_publish_date.get().strip()
             to_date = self.auction_end_publish_date.get().strip()
+        elif self.notice_kind == "select-org":
+            from_date = self.select_org_start_date.get().strip()
+            to_date = self.select_org_end_date.get().strip()
         return CrawlerConfig(
             from_date=from_date,
             to_date=to_date,
@@ -578,6 +832,8 @@ class CrawlerTab(ttk.Frame):
             history_db_path=Path(self.history_db_path.get().strip()),
             enable_history=self.enable_history.get(),
             auction_filters=self._read_auction_filters(),
+            select_org_filters=self._read_select_org_filters(),
+            select_org_result_filters=self._read_select_org_result_filters(),
         )
 
     def _read_auction_filters(self) -> AuctionFilters:
@@ -598,6 +854,31 @@ class CrawlerTab(ttk.Frame):
             type_order="1" if self.auction_type_order.get() == "Ngày tổ chức đấu giá" else "2",
         )
 
+    def _read_select_org_filters(self) -> SelectOrgFilters:
+        if self.notice_kind != "select-org":
+            return SelectOrgFilters()
+        return SelectOrgFilters(
+            owner_fullname=self.select_org_owner_fullname.get().strip(),
+            start_date=self.select_org_start_date.get().strip(),
+            end_date=self.select_org_end_date.get().strip(),
+            province_id=self._select_org_province_options.get(self.select_org_province.get(), ""),
+            district_id=self._select_org_district_options.get(self.select_org_district.get(), ""),
+            property_type_id=self._select_org_property_type_options.get(self.select_org_property_type.get(), ""),
+        )
+
+    def _read_select_org_result_filters(self) -> SelectOrgResultFilters:
+        if self.notice_kind != "select-org-result":
+            return SelectOrgResultFilters()
+        return SelectOrgResultFilters(
+            owner_fullname=self.result_owner_fullname.get().strip(),
+            org_id=self._result_org_options.get(self.result_org.get(), ""),
+            publish_start_date=self.result_publish_start_date.get().strip(),
+            publish_end_date=self.result_publish_end_date.get().strip(),
+            province_id=self._result_province_options.get(self.result_province.get(), ""),
+            district_id=self._result_district_options.get(self.result_district.get(), ""),
+            property_type_id=self._result_property_type_options.get(self.result_property_type.get(), ""),
+        )
+
     def _run_worker(self, config: CrawlerConfig, run_id: int) -> None:
         try:
             output, _count = run_crawl(
@@ -612,6 +893,10 @@ class CrawlerTab(ttk.Frame):
     def _drain_events(self) -> None:
         if self.notice_kind == "auction":
             self._drain_auction_option_events()
+        elif self.notice_kind == "select-org":
+            self._drain_select_org_option_events()
+        elif self.notice_kind == "select-org-result":
+            self._drain_result_option_events()
         batch_count = 0
         while batch_count < 50:
             try:
@@ -693,6 +978,37 @@ class CrawlerTab(ttk.Frame):
             if self.auction_district_combo:
                 self.auction_district_combo.configure(state="disabled")
             self._load_initial_auction_options()
+        elif self.notice_kind == "select-org":
+            self.select_org_owner_fullname.set("")
+            self.select_org_start_date.set("")
+            self.select_org_end_date.set("")
+            if self.select_org_start_date_picker:
+                self.select_org_start_date_picker.delete(0, "end")
+            if self.select_org_end_date_picker:
+                self.select_org_end_date_picker.delete(0, "end")
+            self.select_org_province.set("Tất cả")
+            self.select_org_district.set("Tất cả")
+            self.select_org_property_type.set("Tất cả")
+            self._select_org_district_options = {"Tất cả": ""}
+            self._set_combo_values(self.select_org_district_combo, self._select_org_district_options)
+            if self.select_org_district_combo:
+                self.select_org_district_combo.configure(state="disabled")
+        elif self.notice_kind == "select-org-result":
+            self.result_owner_fullname.set("")
+            self.result_org.set("Tất cả")
+            self.result_publish_start_date.set("")
+            self.result_publish_end_date.set("")
+            if self.result_publish_start_picker:
+                self.result_publish_start_picker.delete(0, "end")
+            if self.result_publish_end_picker:
+                self.result_publish_end_picker.delete(0, "end")
+            self.result_province.set("Tất cả")
+            self.result_district.set("Tất cả")
+            self.result_property_type.set("Tất cả")
+            self._result_district_options = {"Tất cả": ""}
+            self._set_combo_values(self.result_district_combo, self._result_district_options)
+            if self.result_district_combo:
+                self.result_district_combo.configure(state="disabled")
         else:
             self.from_date.set((today - timedelta(days=7)).strftime("%d/%m/%Y"))
             self.to_date.set(today.strftime("%d/%m/%Y"))
