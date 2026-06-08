@@ -39,7 +39,7 @@ def test_run_coordinator_allows_only_one_active_crawl():
 
 
 def test_ui_defaults_are_tuned_for_faster_crawls():
-    assert DEFAULT_UI_PAGE_SIZE == "100"
+    assert DEFAULT_UI_PAGE_SIZE == "10"
     assert DEFAULT_DETAIL_WORKERS == "5"
 
 

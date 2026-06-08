@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import html as html_lib
+import re
 import time
 from datetime import datetime
+from html.parser import HTMLParser
 from typing import Any, Iterator
 
 import requests
 
 from .transform import merge_detail
-from .utils import format_millis_date
+from .utils import build_detail_url, format_millis_date
 
 
 BASE_URL = "https://dgts.moj.gov.vn"
@@ -180,6 +183,24 @@ class DGTSCrawlerClient:
         payload = self._get_json("/portal/propertyInfo", {"auctionInfoId": auction_info_id})
         return merge_detail(payload)
 
+    def auction_detail(self, notice: dict[str, Any]) -> dict[str, Any]:
+        notice_id = notice.get("id")
+        detail = self.property_detail(notice_id)
+        view_detail = _safe_dict(lambda: self._get_json("/portal/viewDetailAuctionInfo", {"auctionInfoId": notice_id}))
+        html_detail = _safe_dict(lambda: self.auction_detail_page_info(notice))
+        if view_detail:
+            detail["viewDetailAuctionInfo"] = view_detail
+            _merge_non_empty_detail_fields(detail, _auction_view_detail_fields(view_detail))
+        if html_detail:
+            detail["htmlDetail"] = html_detail
+            _merge_non_empty_detail_fields(detail, html_detail)
+        return detail
+
+    def auction_detail_page_info(self, notice: dict[str, Any]) -> dict[str, str]:
+        url = build_detail_url(notice.get("id"), str(notice.get("propertyName") or ""))
+        html_text = self._get_text(url)
+        return _auction_detail_info_from_html(html_text)
+
     def select_org_detail(self, notice_id: Any) -> dict[str, Any]:
         return self._get_json("/ThongTin/getDetailSelectOrgAuction", {"id": notice_id})
 
@@ -209,6 +230,151 @@ class DGTSCrawlerClient:
                 if attempt < 2:
                     time.sleep(1 + attempt)
         raise RuntimeError(f"DGTS request failed for {url}: {last_error}") from last_error
+
+    def _get_text(self, url: str) -> str:
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = self.session.get(url, timeout=self.timeout)
+                response.raise_for_status()
+                return response.text
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(1 + attempt)
+        raise RuntimeError(f"DGTS request failed for {url}: {last_error}") from last_error
+
+
+def _safe_dict(loader: Any) -> dict[str, Any]:
+    try:
+        value = loader()
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _merge_non_empty_detail_fields(detail: dict[str, Any], fields: dict[str, Any]) -> None:
+    for key, value in fields.items():
+        if value not in (None, ""):
+            detail[key] = value
+
+
+def _auction_view_detail_fields(detail: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ownerName": detail.get("fullName"),
+        "ownerAddress": detail.get("addrOwner"),
+        "orgName": detail.get("orgFullName"),
+        "orgAddress": detail.get("orgAddress"),
+        "orgPhone": detail.get("foneNumber"),
+        "auctionTimeText": detail.get("strAuctionTime"),
+        "auctionPlace": detail.get("aucAddr"),
+        "auctionMethod": detail.get("strAuctionMethod") or detail.get("aucMethod"),
+        "registrationStartText": detail.get("strAucRegTimeStart"),
+        "registrationEndText": detail.get("strAucRegTimeEnd"),
+        "registrationInfo": detail.get("aucCondition"),
+        "depositStartText": detail.get("strAucTimeDepositStart"),
+        "depositEndText": detail.get("strAucTimeDepositEnd"),
+        "attachmentNames": "\n".join(
+            str(item.get("fileName") or "").strip()
+            for item in (detail.get("listFile") or [])
+            if isinstance(item, dict) and str(item.get("fileName") or "").strip()
+        ),
+    }
+
+
+class _TextCollector(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        value = _clean_text(data)
+        if value:
+            self.parts.append(value)
+
+
+def _auction_detail_info_from_html(html_text: str) -> dict[str, str]:
+    parser = _TextCollector()
+    parser.feed(html_text)
+    tokens = [token for token in parser.parts if not _is_template_text(token)]
+    values: dict[str, str] = {}
+
+    owner_at = _find_token(tokens, "Thông tin người có tài sản")
+    org_at = _find_token(tokens, "Thông tin đơn vị tổ chức hành nghề đấu giá")
+    auction_at = _find_token(tokens, "Thông tin việc đấu giá")
+    if owner_at >= 0:
+        values["ownerName"] = _value_after(tokens, "Tên người có tài sản:", owner_at, org_at)
+        values["ownerAddress"] = _value_after(tokens, "Địa chỉ:", owner_at, org_at)
+    if org_at >= 0:
+        values["orgName"] = _value_after(tokens, "Tên đơn vị Tổ chức đấu giá:", org_at, auction_at)
+        values["orgAddress"] = _value_after(tokens, "Địa chỉ:", org_at, auction_at)
+        values["orgPhone"] = _value_after(tokens, "Số điện thoại:", org_at, auction_at)
+    if auction_at >= 0:
+        values["auctionTimeText"] = _value_after(tokens, "Thời gian tổ chức cuộc đấu giá:", auction_at, -1)
+        values["auctionPlace"] = (
+            _value_after(tokens, "Địa điểm tổ chức cuộc đấu giá:", auction_at, -1)
+            or _value_after(tokens, "Địa điểm tổ chức cuộc đấu gá:", auction_at, -1)
+        )
+        values["registrationStartText"] = _value_after(tokens, "Thời gian bắt đầu đăng ký tham gia đấu giá:", auction_at, -1)
+        values["registrationEndText"] = _value_after(tokens, "Thời gian kết thúc đăng ký tham gia đấu giá:", auction_at, -1)
+        values["registrationInfo"] = _value_after(tokens, "Địa điểm, điều kiện, cách thức đăng ký:", auction_at, -1)
+        values["depositStartText"] = _value_after(tokens, "Thời gian bắt đầu nộp tiền đặt trước:", auction_at, -1)
+        values["depositEndText"] = _value_after(tokens, "Thời gian kết thúc nộp tiền đặt trước:", auction_at, -1)
+        values["attachmentNames"] = _attachments_after(tokens, auction_at)
+    return {key: value for key, value in values.items() if value}
+
+
+def _find_token(tokens: list[str], expected: str, start: int = 0) -> int:
+    expected_key = _label_key(expected)
+    for index in range(max(start, 0), len(tokens)):
+        if _label_key(tokens[index]) == expected_key:
+            return index
+    return -1
+
+
+def _value_after(tokens: list[str], label: str, start: int = 0, end: int = -1) -> str:
+    label_at = _find_token(tokens, label, start)
+    if label_at < 0:
+        return ""
+    stop = end if end >= 0 else len(tokens)
+    if label_at >= stop:
+        return ""
+    for value in tokens[label_at + 1 : stop]:
+        if _looks_like_label(value):
+            return ""
+        if value:
+            return value
+    return ""
+
+
+def _attachments_after(tokens: list[str], start: int) -> str:
+    file_at = _find_token(tokens, "File đính kèm:", start)
+    if file_at < 0:
+        return ""
+    names = []
+    for value in tokens[file_at + 1 :]:
+        if value in {"Quay lại"} or value.startswith("var "):
+            break
+        if value and not _looks_like_label(value):
+            names.append(value)
+    return "\n".join(names)
+
+
+def _clean_text(value: str) -> str:
+    return re.sub(r"\s+", " ", html_lib.unescape(value or "")).strip()
+
+
+def _label_key(value: str) -> str:
+    return _clean_text(value).lower().rstrip(":")
+
+
+def _looks_like_label(value: str) -> bool:
+    return _clean_text(value).endswith(":")
+
+
+def _is_template_text(value: str) -> bool:
+    stripped = _clean_text(value)
+    return "{{" in stripped or "}}" in stripped
 
 
 def _date_filter_state(value: Any, start_date: str, end_date: str) -> str:

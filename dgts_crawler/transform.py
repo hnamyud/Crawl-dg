@@ -69,20 +69,26 @@ def normalize_notice(notice: Mapping[str, Any], detail: Mapping[str, Any]) -> li
         0,
         publish_date,
         publish_round,
-        notice.get("fullname") or "Xem chi tiết trong link",
-        notice.get("orgName") or notice.get("org_name") or "",
-        _auction_info(notice),
+        _owner_info(notice, detail),
+        _org_info(notice, detail),
+        _auction_info(notice, detail),
         "",
         "",
         "",
         0,
         0,
         "",
-        format_millis_date(notice.get("aucRegTimeStart")),
-        format_millis_date(notice.get("aucRegTimeEnd")),
-        _auction_registration_info(notice),
-        format_millis_date(_first_present(notice, "depositTimeStart", "depositStartTime", "depositStartDate")),
-        format_millis_date(_first_present(notice, "depositTimeEnd", "depositEndTime", "depositEndDate")),
+        _date_or_text(detail.get("registrationStartText"), notice.get("aucRegTimeStart")),
+        _date_or_text(detail.get("registrationEndText"), notice.get("aucRegTimeEnd")),
+        _auction_registration_info(notice, detail),
+        _date_or_text(
+            detail.get("depositStartText"),
+            _first_present(notice, "depositTimeStart", "depositStartTime", "depositStartDate"),
+        ),
+        _date_or_text(
+            detail.get("depositEndText"),
+            _first_present(notice, "depositTimeEnd", "depositEndTime", "depositEndDate"),
+        ),
         build_detail_url(notice_id, property_name),
     ]
 
@@ -263,28 +269,70 @@ def _auction_property_name(property_row: Mapping[str, Any], fallback: str, notic
     return f"{notice.get('titleName') or ''}{fallback}".strip()
 
 
-def _auction_info(notice: Mapping[str, Any]) -> str:
+def _owner_info(notice: Mapping[str, Any], detail: Mapping[str, Any]) -> str:
+    name = str(detail.get("ownerName") or notice.get("fullname") or "Xem chi tiết trong link").strip()
+    address = str(detail.get("ownerAddress") or "").strip()
+    return _join_labeled_parts((("Tên", name), ("Địa chỉ", address)))
+
+
+def _org_info(notice: Mapping[str, Any], detail: Mapping[str, Any]) -> str:
+    name = str(detail.get("orgName") or notice.get("orgName") or notice.get("org_name") or "").strip()
+    address = str(detail.get("orgAddress") or "").strip()
+    phone = str(detail.get("orgPhone") or "").strip()
+    return _join_labeled_parts((("Tên", name), ("Địa chỉ", address), ("SĐT", phone)))
+
+
+def _auction_info(notice: Mapping[str, Any], detail: Mapping[str, Any] | None = None) -> str:
+    detail = detail or {}
     parts = []
+    auction_time = _date_or_text(detail.get("auctionTimeText"), notice.get("auctionTime"))
+    auction_place = detail.get("auctionPlace") or notice.get("auctionPlace")
+    auction_method = detail.get("auctionMethod") or notice.get("auctionMethod")
+    if auction_time:
+        parts.append(f"Thời gian đấu giá: {auction_time}")
+    if auction_place:
+        parts.append(f"Địa điểm đấu giá: {auction_place}")
     for label, field_name in (
-        ("Thời gian đấu giá", "auctionTime"),
-        ("Địa điểm đấu giá", "auctionPlace"),
         ("Hình thức đấu giá", "auctionForm"),
         ("Phương thức đấu giá", "auctionMethod"),
     ):
-        value = notice.get(field_name)
+        if field_name == "auctionMethod" and auction_method:
+            value = auction_method
+        else:
+            value = notice.get(field_name)
         if field_name == "auctionTime":
             value = format_millis_date(value)
         if value not in (None, ""):
-            parts.append(f"{label}: {value}")
+            text = f"{label}: {value}"
+            if text not in parts:
+                parts.append(text)
     return "\n".join(parts)
 
 
-def _auction_registration_info(notice: Mapping[str, Any]) -> str:
+def _auction_registration_info(notice: Mapping[str, Any], detail: Mapping[str, Any] | None = None) -> str:
+    detail = detail or {}
+    if detail.get("registrationInfo") not in (None, ""):
+        return str(detail.get("registrationInfo")).strip()
     for field_name in ("aucRegPlace", "auctionRegPlace", "regPlace", "registerPlace"):
         value = notice.get(field_name)
         if value not in (None, ""):
             return str(value).strip()
     return ""
+
+
+def _date_or_text(text_value: Any, millis_value: Any) -> str:
+    if text_value not in (None, ""):
+        return str(text_value).strip()
+    return format_millis_date(millis_value)
+
+
+def _join_labeled_parts(parts: tuple[tuple[str, str], ...]) -> str:
+    values = [(label, value) for label, value in parts if value]
+    if not values:
+        return ""
+    if len(values) == 1:
+        return values[0][1]
+    return "\n".join(f"{label}: {value}" for label, value in values)
 
 
 def _first_present(source: Mapping[str, Any], *field_names: str) -> Any:

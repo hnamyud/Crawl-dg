@@ -121,7 +121,7 @@ def _run_auction_crawl(
     )
 
     def fetch_notice(notice: dict) -> tuple[list[AuctionRow], HistorySnapshot]:
-        detail = client.property_detail(notice.get("id"))
+        detail = client.auction_detail(notice) if hasattr(client, "auction_detail") else client.property_detail(notice.get("id"))
         normalized_rows = normalize_notice(notice, detail)
         return [AuctionRow(row.sheet_name, row.values) for row in normalized_rows], _auction_snapshot(notice, detail, normalized_rows[0])
 

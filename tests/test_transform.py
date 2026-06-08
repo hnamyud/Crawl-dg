@@ -187,6 +187,57 @@ def test_normalize_notice_returns_one_row_per_property_info_item():
     assert rows[1].values[11] == "Theo hiện trạng"
 
 
+def test_normalize_notice_prefers_detail_page_fields_for_auction_excel_columns():
+    notice = {
+        "id": 578599,
+        "propertyName": "Xe ô tô Hyundai",
+        "publishTime1": 1780467642132,
+        "fullname": "Tên list",
+        "org_name": "Tổ chức list",
+        "aucRegTimeStart": 1780851600000,
+        "aucRegTimeEnd": 1781024400000,
+    }
+    detail = {
+        "ownerName": "Ngân hàng TMCP Tiên Phong",
+        "ownerAddress": "Tòa nhà TPBank, số 57 phố Lý Thường Kiệt, Hà Nội.",
+        "orgName": "Công ty đấu giá hợp danh Rồng Việt",
+        "orgAddress": "Số 51 Phạm Văn Bạch, thành phố Đà Nẵng",
+        "orgPhone": "0905156237",
+        "auctionTimeText": "09:30 16/06/2026",
+        "auctionPlace": "Website đấu giá trực tuyến daugiarongviet.vn",
+        "registrationStartText": "08:00 04/06/2026",
+        "registrationEndText": "17:00 11/06/2026",
+        "registrationInfo": "đăng ký đấu giá trực tuyến tại website",
+        "depositStartText": "08:00 04/06/2026",
+        "depositEndText": "17:00 11/06/2026",
+        "items": [
+            {
+                "propertyName": "Xe Hyundai SANTAFE",
+                "propertyAmount": "1",
+                "propertyPlace": "bãi xe tỉnh Vân Quân, Hà Nội",
+                "propertyStartPrice": 452000000,
+                "deposit": 45200000,
+                "depositUnit": 0,
+            }
+        ],
+    }
+
+    row = normalize_notice(notice, detail)[0]
+
+    assert row.values[3] == "Tên: Ngân hàng TMCP Tiên Phong\nĐịa chỉ: Tòa nhà TPBank, số 57 phố Lý Thường Kiệt, Hà Nội."
+    assert row.values[4] == (
+        "Tên: Công ty đấu giá hợp danh Rồng Việt\n"
+        "Địa chỉ: Số 51 Phạm Văn Bạch, thành phố Đà Nẵng\n"
+        "SĐT: 0905156237"
+    )
+    assert row.values[5] == "Thời gian đấu giá: 09:30 16/06/2026\nĐịa điểm đấu giá: Website đấu giá trực tuyến daugiarongviet.vn"
+    assert row.values[12] == "08:00 04/06/2026"
+    assert row.values[13] == "17:00 11/06/2026"
+    assert row.values[14] == "đăng ký đấu giá trực tuyến tại website"
+    assert row.values[15] == "08:00 04/06/2026"
+    assert row.values[16] == "17:00 11/06/2026"
+
+
 def test_normalize_select_org_notice_maps_detail_and_property_rows_to_excel_row():
     notice = {
         "id": 105862,
