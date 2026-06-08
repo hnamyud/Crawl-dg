@@ -64,7 +64,7 @@ EVENT_OPTIONS = {
     "SUSPECT_REPOST": "SUSPECT_REPOST",
     "SAME_ASSET_NAME": "SAME_ASSET_NAME",
 }
-DEFAULT_UI_PAGE_SIZE = "100"
+DEFAULT_UI_PAGE_SIZE = "10"
 DEFAULT_DETAIL_WORKERS = "5"
 HISTORY_PAGE_SIZE = 500
 
@@ -264,7 +264,7 @@ class CrawlerTab(ctk.CTkFrame):
         self.to_date_picker = self._date_entry(2, "Đến ngày", self.to_date)
         self._preset_buttons(3)
         self._entry(4, "Số trang tối đa", self.max_pages, "Bỏ qua khi chọn crawl toàn bộ")
-        self._entry(5, "Số bản ghi mỗi trang", self.page_size, "Mặc định 100 bản ghi để crawl nhanh hơn")
+        self._entry(5, "Số bản ghi mỗi trang", self.page_size, "Mặc định 10 bản ghi để crawl nhanh hơn")
         self._entry(6, "Số luồng tải chi tiết", self.detail_workers, "Mặc định 5 luồng")
         ctk.CTkCheckBox(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc ngày", variable=self.crawl_all).grid(
             row=7, column=1, sticky="w", pady=8
@@ -311,7 +311,7 @@ class CrawlerTab(ctk.CTkFrame):
             3, 1, "Ngày công khai (từ → đến)", self.result_publish_start_date, self.result_publish_end_date
         )
         self._entry(4, "Số trang tối đa", self.max_pages, "Bỏ qua khi chọn crawl toàn bộ")
-        self._entry(5, "Số bản ghi mỗi trang", self.page_size, "Mặc định 100 bản ghi để crawl nhanh hơn")
+        self._entry(5, "Số bản ghi mỗi trang", self.page_size, "Mặc định 10 bản ghi để crawl nhanh hơn")
         self._entry(6, "Số luồng tải chi tiết", self.detail_workers, "Mặc định 5 luồng")
         ctk.CTkCheckBox(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc", variable=self.crawl_all).grid(
             row=7, column=0, columnspan=3, sticky="w", pady=8
@@ -357,7 +357,7 @@ class CrawlerTab(ctk.CTkFrame):
         self.select_org_district_combo.configure(state="disabled")
         self.select_org_property_type_combo = self._combo_field(3, 0, "Loại tài sản", self.select_org_property_type)
         self._entry(4, "Số trang tối đa", self.max_pages, "Bỏ qua khi chọn crawl toàn bộ")
-        self._entry(5, "Số bản ghi mỗi trang", self.page_size, "Mặc định 100 bản ghi để crawl nhanh hơn")
+        self._entry(5, "Số bản ghi mỗi trang", self.page_size, "Mặc định 10 bản ghi để crawl nhanh hơn")
         self._entry(6, "Số luồng tải chi tiết", self.detail_workers, "Mặc định 5 luồng")
         ctk.CTkCheckBox(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc", variable=self.crawl_all).grid(
             row=7, column=0, columnspan=3, sticky="w", pady=8
@@ -414,7 +414,7 @@ class CrawlerTab(ctk.CTkFrame):
         )
         self.auction_property_type_combo = self._combo_field(5, 0, "Loại tài sản", self.auction_property_type)
         self._entry(6, "Số trang tối đa", self.max_pages, "Bỏ qua khi chọn crawl toàn bộ")
-        self._entry(7, "Số bản ghi mỗi trang", self.page_size, "Mặc định 100 bản ghi để crawl nhanh hơn")
+        self._entry(7, "Số bản ghi mỗi trang", self.page_size, "Mặc định 10 bản ghi để crawl nhanh hơn")
         self._entry(8, "Số luồng tải chi tiết", self.detail_workers, "Mặc định 5 luồng")
         ctk.CTkCheckBox(self, text="Crawl toàn bộ dữ liệu khớp bộ lọc", variable=self.crawl_all).grid(
             row=9, column=0, columnspan=3, sticky="w", pady=8
