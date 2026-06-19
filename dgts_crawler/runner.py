@@ -9,6 +9,7 @@ from typing import Any, Callable, Iterable, Iterator, Literal, TypeVar
 from .client import DGTSCrawlerClient
 from .excel_writer import AuctionRow, write_select_org_result_workbook, write_select_org_workbook, write_workbook
 from .history_store import HistorySnapshot, HistoryStore
+from .screenshots import ScreenshotJob, capture_screenshot_jobs
 from .transform import extract_province, normalize_notice, normalize_select_org_notices, normalize_select_org_result_notices
 
 
@@ -73,6 +74,9 @@ class CrawlerConfig:
     output_path: Path = Path("DGTS_Output.xlsx")
     history_db_path: Path = Path("outputs") / "dgts_history.sqlite"
     enable_history: bool = True
+    enable_screenshots: bool = False
+    screenshot_dir: Path = Path("outputs") / "screenshots"
+    screenshot_started_at: datetime | None = None
     auction_filters: AuctionFilters = AuctionFilters()
     select_org_filters: SelectOrgFilters = SelectOrgFilters()
     select_org_result_filters: SelectOrgResultFilters = SelectOrgResultFilters()
@@ -110,6 +114,7 @@ def _run_auction_crawl(
 ) -> tuple[Path, int]:
     rows: list[AuctionRow] = []
     snapshots: list[HistorySnapshot] = []
+    screenshot_jobs: list[ScreenshotJob] = []
     crawl_completed = True
     checked_count = 0
     notices = client.iter_notices(
@@ -120,14 +125,20 @@ def _run_auction_crawl(
         filters=_auction_filters_for_run(config, start_date, end_date),
     )
 
-    def fetch_notice(notice: dict) -> tuple[list[AuctionRow], HistorySnapshot]:
+    def fetch_notice(notice: dict) -> tuple[list[AuctionRow], HistorySnapshot, list[ScreenshotJob]]:
         detail = client.auction_detail(notice) if hasattr(client, "auction_detail") else client.property_detail(notice.get("id"))
         normalized_rows = normalize_notice(notice, detail)
-        return [AuctionRow(row.sheet_name, row.values) for row in normalized_rows], _auction_snapshot(notice, detail, normalized_rows[0])
+        auction_rows = [AuctionRow(row.sheet_name, row.values) for row in normalized_rows]
+        return (
+            auction_rows,
+            _auction_snapshot(notice, detail, normalized_rows[0]),
+            _screenshot_jobs("auction", notice.get("id"), auction_rows),
+        )
 
-    for normalized_rows, snapshot in _map_details(notices, fetch_notice, config.detail_workers, should_stop):
+    for normalized_rows, snapshot, notice_screenshot_jobs in _map_details(notices, fetch_notice, config.detail_workers, should_stop):
         rows.extend(normalized_rows)
         snapshots.append(snapshot)
+        screenshot_jobs.extend(notice_screenshot_jobs)
         checked_count += 1
         _emit_checked_progress(progress, checked_count)
         if rows and len(rows) % 10 == 0:
@@ -137,6 +148,7 @@ def _run_auction_crawl(
             crawl_completed = False
             break
 
+    _capture_config_screenshots(config, screenshot_jobs, progress)
     _emit(progress, "Đang ghi file Excel...")
     output = write_workbook(config.output_path, rows)
     _record_history(
@@ -163,6 +175,7 @@ def _run_select_org_crawl(
 ) -> tuple[Path, int]:
     rows: list[AuctionRow] = []
     snapshots: list[HistorySnapshot] = []
+    screenshot_jobs: list[ScreenshotJob] = []
     crawl_completed = True
     checked_count = 0
     notices = client.iter_select_org_notices(
@@ -173,22 +186,25 @@ def _run_select_org_crawl(
         filters=_select_org_filters_for_run(config, start_date, end_date),
     )
 
-    def fetch_notice(notice: dict) -> tuple[list[AuctionRow], HistorySnapshot | None]:
+    def fetch_notice(notice: dict) -> tuple[list[AuctionRow], HistorySnapshot | None, list[ScreenshotJob]]:
         notice_id = notice.get("id")
         detail = client.select_org_detail(notice_id)
         property_rows = client.select_org_property_info(notice_id)
         normalized_rows = normalize_select_org_notices(notice, detail, property_rows)
         if not normalized_rows or not _date_in_range(normalized_rows[0].values[1], start_date, end_date):
-            return [], None
+            return [], None, []
+        select_org_rows = [AuctionRow(normalized.sheet_name, normalized.values) for normalized in normalized_rows]
         return (
-            [AuctionRow(normalized.sheet_name, normalized.values) for normalized in normalized_rows],
+            select_org_rows,
             _select_org_snapshot(notice, detail, property_rows, normalized_rows),
+            _screenshot_jobs("select-org", notice_id, select_org_rows),
         )
 
-    for normalized_rows, snapshot in _map_details(notices, fetch_notice, config.detail_workers, should_stop):
+    for normalized_rows, snapshot, notice_screenshot_jobs in _map_details(notices, fetch_notice, config.detail_workers, should_stop):
         checked_count += 1
         _emit_checked_progress(progress, checked_count)
         rows.extend(normalized_rows)
+        screenshot_jobs.extend(notice_screenshot_jobs)
         if snapshot:
             snapshots.append(snapshot)
         if rows and len(rows) % 10 == 0:
@@ -198,6 +214,7 @@ def _run_select_org_crawl(
             crawl_completed = False
             break
 
+    _capture_config_screenshots(config, screenshot_jobs, progress)
     _emit(progress, "Đang ghi file Excel...")
     output = write_select_org_workbook(config.output_path, rows)
     _record_history(
@@ -224,6 +241,7 @@ def _run_select_org_result_crawl(
 ) -> tuple[Path, int]:
     rows: list[AuctionRow] = []
     snapshots: list[HistorySnapshot] = []
+    screenshot_jobs: list[ScreenshotJob] = []
     crawl_completed = True
     checked_count = 0
     notices = client.iter_select_org_result_notices(
@@ -234,23 +252,26 @@ def _run_select_org_result_crawl(
         filters=_select_org_result_filters_for_run(config),
     )
 
-    def fetch_notice(notice: dict) -> tuple[list[AuctionRow], HistorySnapshot | None]:
+    def fetch_notice(notice: dict) -> tuple[list[AuctionRow], HistorySnapshot | None, list[ScreenshotJob]]:
         result_id = notice.get("id")
         owner = client.select_org_result_owner(result_id)
         history = client.select_org_result_history(result_id)
         info = client.select_org_result_info(result_id)
         normalized_rows = normalize_select_org_result_notices(notice, owner, history, info)
         if not normalized_rows or not _date_in_range(normalized_rows[0].values[1], start_date, end_date):
-            return [], None
+            return [], None, []
+        result_rows = [AuctionRow(normalized.sheet_name, normalized.values) for normalized in normalized_rows]
         return (
-            [AuctionRow(normalized.sheet_name, normalized.values) for normalized in normalized_rows],
+            result_rows,
             _select_org_result_snapshot(notice, owner, history, info, normalized_rows),
+            _screenshot_jobs("select-org-result", result_id, result_rows),
         )
 
-    for normalized_rows, snapshot in _map_details(notices, fetch_notice, config.detail_workers, should_stop):
+    for normalized_rows, snapshot, notice_screenshot_jobs in _map_details(notices, fetch_notice, config.detail_workers, should_stop):
         checked_count += 1
         _emit_checked_progress(progress, checked_count)
         rows.extend(normalized_rows)
+        screenshot_jobs.extend(notice_screenshot_jobs)
         if snapshot:
             snapshots.append(snapshot)
         if rows and len(rows) % 10 == 0:
@@ -260,6 +281,7 @@ def _run_select_org_result_crawl(
             crawl_completed = False
             break
 
+    _capture_config_screenshots(config, screenshot_jobs, progress)
     _emit(progress, "Đang ghi file Excel...")
     output = write_select_org_result_workbook(config.output_path, rows)
     _record_history(
@@ -295,6 +317,65 @@ def validate_config(config: CrawlerConfig) -> list[str]:
     except ValueError:
         errors.append("Ngày kết thúc phải có dạng dd/MM/yyyy hoặc yyyy-mm-dd.")
     return errors
+
+
+def _capture_config_screenshots(
+    config: CrawlerConfig,
+    screenshot_jobs: list[ScreenshotJob],
+    progress: ProgressCallback | None,
+) -> None:
+    if not config.enable_screenshots:
+        return
+    output_dir = config.screenshot_dir / _screenshot_run_folder_name(config.notice_kind, config.screenshot_started_at)
+    _emit(progress, f"Thư mục lưu ảnh: {output_dir}")
+    if not screenshot_jobs:
+        _emit(progress, "Không có bài nào để chụp ảnh.")
+        return
+    _emit(progress, f"Đang chụp ảnh {len(screenshot_jobs)} bài...")
+    capture_screenshot_jobs(_numbered_screenshot_jobs(screenshot_jobs), output_dir, progress=progress)
+
+
+def _numbered_screenshot_jobs(jobs: list[ScreenshotJob]) -> list[ScreenshotJob]:
+    return [
+        ScreenshotJob(
+            notice_kind=job.notice_kind,
+            notice_id=job.notice_id,
+            asset_index=job.asset_index,
+            url=job.url,
+            sequence=index,
+        )
+        for index, job in enumerate(jobs, start=1)
+    ]
+
+
+def _screenshot_run_folder_name(notice_kind: str, started_at: datetime | None = None) -> str:
+    timestamp = (started_at or datetime.now()).strftime("%Y-%m-%d_%H-%M-%S")
+    return f"{notice_kind}_{timestamp}"
+
+
+def _screenshot_jobs(notice_kind: str, notice_id: Any, rows: list[AuctionRow]) -> list[ScreenshotJob]:
+    url_index = _detail_url_index(notice_kind)
+    jobs: list[ScreenshotJob] = []
+    for asset_index, row in enumerate(rows, start=1):
+        values = _padded(row.values, url_index + 1)
+        url = str(values[url_index] or "").strip()
+        jobs.append(
+            ScreenshotJob(
+                notice_kind=notice_kind,
+                notice_id=str(notice_id or ""),
+                asset_index=asset_index,
+                url=url,
+            )
+        )
+    return jobs
+
+
+def _detail_url_index(notice_kind: str) -> int:
+    if notice_kind == "auction":
+        return 17
+    if notice_kind == "select-org":
+        return 12
+    return 11
 
 
 def resolve_dates(config: CrawlerConfig, today: datetime | None = None) -> tuple[str, str]:

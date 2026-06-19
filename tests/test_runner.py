@@ -701,6 +701,85 @@ def test_run_crawl_select_org_exports_one_row_per_property_row(monkeypatch, tmp_
     assert [row.values[7] for row in exported["rows"]] == [35000000, 85000000, 100000000]
 
 
+def test_run_crawl_captures_screenshots_for_each_normalized_row(monkeypatch, tmp_path):
+    output = tmp_path / "auction.xlsx"
+    screenshot_dir = tmp_path / "shots"
+    captured = {}
+
+    class FakeClient:
+        def iter_notices(self, **kwargs):
+            yield {"id": 105862, "propertyName": "Xe ô tô", "publicDate": 1780664230000}
+
+        def auction_detail(self, notice):
+            return {
+                "items": [
+                    {"propertyName": "Xe 1", "propertyStartPrice": 1000},
+                    {"propertyName": "Xe 2", "propertyStartPrice": 2000},
+                ]
+            }
+
+    def fake_write_workbook(output_path, rows):
+        return output_path
+
+    def fake_capture_screenshot_jobs(jobs, output_dir, progress=None):
+        captured["jobs"] = list(jobs)
+        captured["output_dir"] = output_dir
+        return None
+
+    monkeypatch.setattr("dgts_crawler.runner.write_workbook", fake_write_workbook)
+    monkeypatch.setattr("dgts_crawler.runner.capture_screenshot_jobs", fake_capture_screenshot_jobs)
+
+    result, count = run_crawl(
+        CrawlerConfig(
+            output_path=output,
+            enable_history=False,
+            enable_screenshots=True,
+            screenshot_dir=screenshot_dir,
+            screenshot_started_at=datetime(2026, 6, 19, 16, 30, 5),
+        ),
+        client=FakeClient(),
+    )
+
+    assert result == output
+    assert count == 2
+    assert captured["output_dir"] == screenshot_dir / "auction_2026-06-19_16-30-05"
+    assert [(job.notice_kind, job.notice_id, job.asset_index) for job in captured["jobs"]] == [
+        ("auction", "105862", 1),
+        ("auction", "105862", 2),
+    ]
+    assert [job.sequence for job in captured["jobs"]] == [1, 2]
+    assert all(job.url.endswith("-105862.html") for job in captured["jobs"])
+
+
+def test_run_crawl_logs_when_screenshot_enabled_but_no_rows_match(monkeypatch, tmp_path):
+    output = tmp_path / "auction.xlsx"
+    messages = []
+
+    class FakeClient:
+        def iter_notices(self, **kwargs):
+            return iter(())
+
+    def fake_write_workbook(output_path, rows):
+        return output_path
+
+    monkeypatch.setattr("dgts_crawler.runner.write_workbook", fake_write_workbook)
+
+    run_crawl(
+        CrawlerConfig(
+            output_path=output,
+            enable_history=False,
+            enable_screenshots=True,
+            screenshot_dir=tmp_path / "shots",
+            screenshot_started_at=datetime(2026, 6, 19, 16, 30, 5),
+        ),
+        client=FakeClient(),
+        progress=messages.append,
+    )
+
+    assert f"Thư mục lưu ảnh: {tmp_path / 'shots' / 'auction_2026-06-19_16-30-05'}" in messages
+    assert "Không có bài nào để chụp ảnh." in messages
+
+
 def test_run_crawl_select_org_result_filters_locally_and_exports_property_rows(monkeypatch, tmp_path):
     output = tmp_path / "select-org-result.xlsx"
     exported = {}

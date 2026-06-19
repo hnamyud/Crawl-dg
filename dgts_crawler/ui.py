@@ -3,6 +3,7 @@ from __future__ import annotations
 import queue
 import threading
 import tkinter as tk
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -67,6 +68,7 @@ EVENT_OPTIONS = {
 DEFAULT_UI_PAGE_SIZE = "10"
 DEFAULT_DETAIL_WORKERS = "5"
 HISTORY_PAGE_SIZE = 500
+MAX_SUGGESTION_ROWS = 10
 
 
 def format_done_message(output: Path) -> str:
@@ -122,6 +124,39 @@ def _option_map(items: object, label_field: str) -> dict[str, str]:
         if label and value:
             options[label] = value
     return options
+
+
+def _search_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFD", value.strip().casefold()).replace("đ", "d")
+    return "".join(char for char in normalized if unicodedata.category(char) != "Mn")
+
+
+def _filter_option_labels(labels: list[str], typed_text: str) -> list[str]:
+    query = _search_key(typed_text)
+    if not query:
+        return labels
+    return [label for label in labels if label == "Tất cả" or query in _search_key(label)]
+
+
+def _suggestion_popup_height(item_count: int) -> int:
+    return max(1, min(MAX_SUGGESTION_ROWS, item_count))
+
+
+def _focus_is_within_combo_suggestion(focus: object | None, combo: object, popup: object) -> bool:
+    if focus is None:
+        return False
+    if focus is getattr(combo, "_entry", None):
+        return True
+    try:
+        return focus.winfo_toplevel() is popup
+    except Exception:
+        return False
+
+
+def _raise_suggestion_popup(popup: object) -> None:
+    popup.lift()
+    popup.attributes("-topmost", True)
+    popup.after(50, lambda: popup.attributes("-topmost", False))
 
 
 class RunCoordinator:
@@ -219,6 +254,8 @@ class CrawlerTab(ctk.CTkFrame):
         self.output_path = tk.StringVar(value=str(output_default))
         self.history_db_path = tk.StringVar(value=str(Path("outputs") / "dgts_history.sqlite"))
         self.enable_history = tk.BooleanVar(value=True)
+        self.enable_screenshots = tk.BooleanVar(value=False)
+        self.screenshot_dir = tk.StringVar(value=str(Path("outputs") / "screenshots"))
         self.status = tk.StringVar(value="Sẵn sàng")
         self.events: queue.Queue[tuple[int, str, str]] = queue.Queue()
         self.stop_event = threading.Event()
@@ -235,6 +272,7 @@ class CrawlerTab(ctk.CTkFrame):
         self.auction_property_type_combo: ctk.CTkComboBox | None = None
 
         self._log_batch: list[str] = []
+        self._active_suggestion_popup: tk.Toplevel | None = None
         self._build_layout()
         if self.notice_kind == "auction":
             self._load_initial_auction_options()
@@ -302,8 +340,13 @@ class CrawlerTab(ctk.CTkFrame):
         )
         self._entry_field(1, 0, "Người có tài sản", self.result_owner_fullname, "Tên người có tài sản")
         self.result_org_combo = self._combo_field(1, 1, "Tên Tổ chức", self.result_org)
-        self.result_province_combo = self._combo_field(2, 0, "Tỉnh/Thành phố", self.result_province)
-        self.result_province_combo.configure(command=lambda _val: self._on_result_province_selected())
+        self.result_province_combo = self._combo_field(
+            2,
+            0,
+            "Tỉnh/Thành phố",
+            self.result_province,
+            command=lambda _val: self._on_result_province_selected(),
+        )
         self.result_district_combo = self._combo_field(2, 1, "Quận/Huyện", self.result_district)
         self.result_district_combo.configure(state="disabled")
         self.result_property_type_combo = self._combo_field(3, 0, "Loại tài sản", self.result_property_type)
@@ -323,8 +366,9 @@ class CrawlerTab(ctk.CTkFrame):
             text="Lưu lịch sử và phát hiện thay đổi",
             variable=self.enable_history,
         ).grid(row=10, column=0, columnspan=3, sticky="w", pady=8)
+        self._screenshot_options(11)
         actions = ctk.CTkFrame(self, fg_color="transparent")
-        actions.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(16, 8))
+        actions.grid(row=12, column=0, columnspan=3, sticky="ew", pady=(16, 8))
         actions.columnconfigure(2, weight=1)
         self.run_button = ctk.CTkButton(actions, text="Bắt đầu crawl", command=self._start_crawl, width=120)
         self.run_button.grid(row=0, column=0, sticky="w")
@@ -334,11 +378,11 @@ class CrawlerTab(ctk.CTkFrame):
             row=0, column=2, sticky="w", padx=(10, 0)
         )
         ctk.CTkLabel(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
-        ctk.CTkLabel(self, text="Log").grid(row=12, column=0, sticky="nw", pady=(8, 4))
+        ctk.CTkLabel(self, text="Log").grid(row=13, column=0, sticky="nw", pady=(8, 4))
         self.log = ctk.CTkTextbox(self, height=220, wrap="word")
         self.log.configure(state="disabled")
-        self.log.grid(row=13, column=0, columnspan=3, sticky="nsew")
-        self.rowconfigure(13, weight=1)
+        self.log.grid(row=14, column=0, columnspan=3, sticky="nsew")
+        self.rowconfigure(14, weight=1)
 
     def _build_select_org_layout(self) -> None:
         """Rich filter layout for Tab 2 (select-org), matching the DGTS website."""
@@ -351,8 +395,13 @@ class CrawlerTab(ctk.CTkFrame):
         self.select_org_start_date_picker, self.select_org_end_date_picker = self._date_range_field(
             1, 1, "Thời gian nộp hồ sơ", self.select_org_start_date, self.select_org_end_date
         )
-        self.select_org_province_combo = self._combo_field(2, 0, "Tỉnh/Thành phố", self.select_org_province)
-        self.select_org_province_combo.configure(command=lambda _val: self._on_select_org_province_selected())
+        self.select_org_province_combo = self._combo_field(
+            2,
+            0,
+            "Tỉnh/Thành phố",
+            self.select_org_province,
+            command=lambda _val: self._on_select_org_province_selected(),
+        )
         self.select_org_district_combo = self._combo_field(2, 1, "Quận/Huyện", self.select_org_district)
         self.select_org_district_combo.configure(state="disabled")
         self.select_org_property_type_combo = self._combo_field(3, 0, "Loại tài sản", self.select_org_property_type)
@@ -369,8 +418,9 @@ class CrawlerTab(ctk.CTkFrame):
             text="Lưu lịch sử và phát hiện thay đổi",
             variable=self.enable_history,
         ).grid(row=10, column=0, columnspan=3, sticky="w", pady=8)
+        self._screenshot_options(11)
         actions = ctk.CTkFrame(self, fg_color="transparent")
-        actions.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(16, 8))
+        actions.grid(row=12, column=0, columnspan=3, sticky="ew", pady=(16, 8))
         actions.columnconfigure(2, weight=1)
         self.run_button = ctk.CTkButton(actions, text="Bắt đầu crawl", command=self._start_crawl, width=120)
         self.run_button.grid(row=0, column=0, sticky="w")
@@ -380,11 +430,11 @@ class CrawlerTab(ctk.CTkFrame):
             row=0, column=2, sticky="w", padx=(10, 0)
         )
         ctk.CTkLabel(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
-        ctk.CTkLabel(self, text="Log").grid(row=12, column=0, sticky="nw", pady=(8, 4))
+        ctk.CTkLabel(self, text="Log").grid(row=13, column=0, sticky="nw", pady=(8, 4))
         self.log = ctk.CTkTextbox(self, height=220, wrap="word")
         self.log.configure(state="disabled")
-        self.log.grid(row=13, column=0, columnspan=3, sticky="nsew")
-        self.rowconfigure(13, weight=1)
+        self.log.grid(row=14, column=0, columnspan=3, sticky="nsew")
+        self.rowconfigure(14, weight=1)
 
     def _build_auction_layout(self) -> None:
         self.columnconfigure(0, weight=1)
@@ -400,8 +450,13 @@ class CrawlerTab(ctk.CTkFrame):
         self.auction_start_publish_date_picker, self.auction_end_publish_date_picker = self._date_range_field(
             2, 1, "Thời gian công khai việc đấu giá", self.auction_start_publish_date, self.auction_end_publish_date
         )
-        self.auction_province_combo = self._combo_field(3, 0, "Tỉnh thành phố", self.auction_province)
-        self.auction_province_combo.configure(command=lambda _val: self._on_auction_province_selected())
+        self.auction_province_combo = self._combo_field(
+            3,
+            0,
+            "Tỉnh thành phố",
+            self.auction_province,
+            command=lambda _val: self._on_auction_province_selected(),
+        )
         self.auction_district_combo = self._combo_field(3, 1, "Quận/huyện", self.auction_district)
         self.auction_district_combo.configure(state="disabled")
         self._price_range_field(4, 0)
@@ -411,6 +466,7 @@ class CrawlerTab(ctk.CTkFrame):
             "Tiêu chí sắp xếp",
             self.auction_type_order,
             values=["Ngày công khai việc đấu giá", "Ngày tổ chức đấu giá"],
+            searchable=False,
         )
         self.auction_property_type_combo = self._combo_field(5, 0, "Loại tài sản", self.auction_property_type)
         self._entry(6, "Số trang tối đa", self.max_pages, "Bỏ qua khi chọn crawl toàn bộ")
@@ -426,9 +482,10 @@ class CrawlerTab(ctk.CTkFrame):
             text="Lưu lịch sử và phát hiện thay đổi",
             variable=self.enable_history,
         ).grid(row=12, column=0, columnspan=3, sticky="w", pady=8)
+        self._screenshot_options(13)
 
         actions = ctk.CTkFrame(self, fg_color="transparent")
-        actions.grid(row=13, column=0, columnspan=3, sticky="ew", pady=(16, 8))
+        actions.grid(row=14, column=0, columnspan=3, sticky="ew", pady=(16, 8))
         actions.columnconfigure(2, weight=1)
         self.run_button = ctk.CTkButton(actions, text="Bắt đầu crawl", command=self._start_crawl, width=120)
         self.run_button.grid(row=0, column=0, sticky="w")
@@ -439,11 +496,11 @@ class CrawlerTab(ctk.CTkFrame):
         )
         ctk.CTkLabel(actions, textvariable=self.status).grid(row=0, column=3, sticky="e")
 
-        ctk.CTkLabel(self, text="Log").grid(row=14, column=0, sticky="nw", pady=(8, 4))
+        ctk.CTkLabel(self, text="Log").grid(row=15, column=0, sticky="nw", pady=(8, 4))
         self.log = ctk.CTkTextbox(self, height=220, wrap="word")
         self.log.configure(state="disabled")
-        self.log.grid(row=15, column=0, columnspan=3, sticky="nsew")
-        self.rowconfigure(15, weight=1)
+        self.log.grid(row=16, column=0, columnspan=3, sticky="nsew")
+        self.rowconfigure(16, weight=1)
 
     def _field_frame(self, row: int, column: int, label: str) -> ctk.CTkFrame:
         frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -465,11 +522,149 @@ class CrawlerTab(ctk.CTkFrame):
         label: str,
         variable: tk.StringVar,
         values: list[str] | None = None,
+        command: object | None = None,
+        searchable: bool = True,
     ) -> ctk.CTkComboBox:
         frame = self._field_frame(row, column, label)
-        combo = ctk.CTkComboBox(frame, variable=variable, state="readonly", values=values or ["Tất cả"])
+        combo = ctk.CTkComboBox(
+            frame,
+            variable=variable,
+            state="normal" if searchable else "readonly",
+            values=values or ["Tất cả"],
+            command=command,
+        )
+        if searchable:
+            self._make_combo_searchable(combo, variable, command)
         combo.grid(row=1, column=0, sticky="ew")
         return combo
+
+    def _make_combo_searchable(
+        self,
+        combo: ctk.CTkComboBox,
+        variable: tk.StringVar,
+        command: object | None = None,
+    ) -> None:
+        combo._searchable_values = list(combo.cget("values"))  # type: ignore[attr-defined]
+        combo._searchable_command = command  # type: ignore[attr-defined]
+        combo._open_dropdown_menu = lambda: self._show_combo_suggestions(combo, variable, command, show_all=True)  # type: ignore[method-assign]
+
+        def filter_values(_event: tk.Event) -> None:
+            key = getattr(_event, "keysym", "")
+            if key in {"Up", "Down", "Left", "Right", "Return", "Tab"}:
+                return
+            if key == "Escape":
+                self._hide_combo_suggestions()
+                return
+            values = getattr(combo, "_searchable_values", list(combo.cget("values")))
+            filtered = _filter_option_labels(values, variable.get())
+            combo.configure(values=filtered)
+            if filtered:
+                self._show_combo_suggestions(combo, variable, command)
+            else:
+                self._hide_combo_suggestions()
+
+        def apply_exact_match(_event: tk.Event) -> None:
+            values = getattr(combo, "_searchable_values", list(combo.cget("values")))
+            current = variable.get()
+            combo.configure(values=_filter_option_labels(values, current))
+            callback = getattr(combo, "_searchable_command", None)
+            if callback and current in values:
+                callback(current)
+                self._hide_combo_suggestions()
+
+        def hide_after_focus_leaves(_event: tk.Event) -> None:
+            popup = self._active_suggestion_popup
+
+            def maybe_hide() -> None:
+                focus = self.focus_get()
+                active_popup = self._active_suggestion_popup
+                if active_popup is None or active_popup is not popup:
+                    return
+                if not _focus_is_within_combo_suggestion(focus, combo, active_popup):
+                    self._hide_combo_suggestions()
+
+            self.after(150, maybe_hide)
+
+        combo.bind("<KeyRelease>", filter_values, add=True)
+        combo.bind("<Return>", apply_exact_match, add=True)
+        combo.bind("<FocusOut>", hide_after_focus_leaves, add=True)
+
+    def _show_combo_suggestions(
+        self,
+        combo: ctk.CTkComboBox,
+        variable: tk.StringVar,
+        command: object | None = None,
+        show_all: bool = False,
+    ) -> None:
+        values = getattr(combo, "_searchable_values", list(combo.cget("values")))
+        suggestions = values if show_all else _filter_option_labels(values, variable.get())
+        if not suggestions:
+            self._hide_combo_suggestions()
+            return
+
+        self._hide_combo_suggestions()
+        popup = tk.Toplevel(self)
+        popup.overrideredirect(True)
+        popup.transient(self.winfo_toplevel())
+        popup.configure(bg="#343638" if ctk.get_appearance_mode() == "Dark" else "#ffffff")
+        self._active_suggestion_popup = popup
+
+        row_count = _suggestion_popup_height(len(suggestions))
+        listbox = tk.Listbox(
+            popup,
+            height=row_count,
+            activestyle="none",
+            exportselection=False,
+            bg="#343638" if ctk.get_appearance_mode() == "Dark" else "#ffffff",
+            fg="white" if ctk.get_appearance_mode() == "Dark" else "black",
+            selectbackground="#1f538d" if ctk.get_appearance_mode() == "Dark" else "#3b8ed0",
+            selectforeground="white",
+            relief="solid",
+            borderwidth=1,
+            font=("Segoe UI", 10),
+        )
+        scrollbar = ttk.Scrollbar(popup, orient="vertical", command=listbox.yview)
+        listbox.configure(yscrollcommand=scrollbar.set)
+        for suggestion in suggestions:
+            listbox.insert("end", suggestion)
+        listbox.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        popup.columnconfigure(0, weight=1)
+        popup.rowconfigure(0, weight=1)
+
+        width = max(combo.winfo_width(), 180)
+        item_height = 24
+        popup.geometry(f"{width}x{row_count * item_height}+{combo.winfo_rootx()}+{combo.winfo_rooty() + combo.winfo_height()}")
+        try:
+            _raise_suggestion_popup(popup)
+        except Exception:
+            pass
+
+        def choose_current(_event: tk.Event | None = None) -> None:
+            selection = listbox.curselection()
+            if not selection:
+                return
+            value = str(listbox.get(selection[0]))
+            variable.set(value)
+            combo.configure(values=_filter_option_labels(values, value))
+            self._hide_combo_suggestions()
+            callback = command or getattr(combo, "_searchable_command", None)
+            if callback:
+                callback(value)
+            combo.focus_force()
+
+        listbox.bind("<ButtonRelease-1>", choose_current)
+        listbox.bind("<Return>", choose_current)
+        listbox.bind("<Escape>", lambda _event: self._hide_combo_suggestions())
+        combo.focus_force()
+
+    def _hide_combo_suggestions(self) -> None:
+        if self._active_suggestion_popup is None:
+            return
+        try:
+            self._active_suggestion_popup.destroy()
+        finally:
+            self._active_suggestion_popup = None
 
     def _date_range_field(
         self,
@@ -562,7 +757,7 @@ class CrawlerTab(ctk.CTkFrame):
         self._auction_district_options = {"Tất cả": ""}
         self._set_combo_values(self.auction_district_combo, self._auction_district_options)
         if self.auction_district_combo:
-            self.auction_district_combo.configure(state="disabled" if not province_id else "readonly")
+            self.auction_district_combo.configure(state="disabled" if not province_id else "normal")
         if not province_id:
             self._load_initial_auction_options()
             return
@@ -608,7 +803,7 @@ class CrawlerTab(ctk.CTkFrame):
         self._select_org_district_options = {"Tất cả": ""}
         self._set_combo_values(self.select_org_district_combo, self._select_org_district_options)
         if self.select_org_district_combo:
-            self.select_org_district_combo.configure(state="disabled" if not province_id else "readonly")
+            self.select_org_district_combo.configure(state="disabled" if not province_id else "normal")
         if not province_id:
             return
 
@@ -686,7 +881,7 @@ class CrawlerTab(ctk.CTkFrame):
         self._result_district_options = {"Tất cả": ""}
         self._set_combo_values(self.result_district_combo, self._result_district_options)
         if self.result_district_combo:
-            self.result_district_combo.configure(state="disabled" if not province_id else "readonly")
+            self.result_district_combo.configure(state="disabled" if not province_id else "normal")
         if not province_id:
             return
 
@@ -720,10 +915,12 @@ class CrawlerTab(ctk.CTkFrame):
                 self._result_district_options = _option_map(payload.get("districts") or [], "name")
                 self._set_combo_values(self.result_district_combo, self._result_district_options)
 
-    def _set_combo_values(self, combo: ttk.Combobox | None, options: dict[str, str]) -> None:
+    def _set_combo_values(self, combo: ctk.CTkComboBox | None, options: dict[str, str]) -> None:
         if combo is None:
             return
         values = list(options)
+        if hasattr(combo, "_searchable_values"):
+            combo._searchable_values = values  # type: ignore[attr-defined]
         combo.configure(values=values)
         if combo.get() not in values:
             combo.set("Tất cả")
@@ -809,6 +1006,20 @@ class CrawlerTab(ctk.CTkFrame):
         ctk.CTkEntry(self, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=5)
         ctk.CTkButton(self, text="Chọn...", command=command, width=80).grid(row=row, column=2, sticky="ew", padx=(10, 0), pady=5)
 
+    def _screenshot_options(self, row: int) -> None:
+        frame = ctk.CTkFrame(self, fg_color="transparent")
+        frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=6)
+        frame.columnconfigure(1, weight=1)
+        ctk.CTkCheckBox(
+            frame,
+            text="Chụp ảnh từng bài",
+            variable=self.enable_screenshots,
+        ).grid(row=0, column=0, sticky="w", padx=(0, 14))
+        ctk.CTkEntry(frame, textvariable=self.screenshot_dir).grid(row=0, column=1, sticky="ew")
+        ctk.CTkButton(frame, text="Chọn...", command=self._browse_screenshot_dir, width=80).grid(
+            row=0, column=2, sticky="ew", padx=(10, 0)
+        )
+
     def _browse_output(self) -> None:
         path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")])
         if path:
@@ -821,6 +1032,11 @@ class CrawlerTab(ctk.CTkFrame):
         )
         if path:
             self.history_db_path.set(path)
+
+    def _browse_screenshot_dir(self) -> None:
+        path = filedialog.askdirectory()
+        if path:
+            self.screenshot_dir.set(path)
 
     def _start_crawl(self) -> None:
         try:
@@ -881,6 +1097,8 @@ class CrawlerTab(ctk.CTkFrame):
             output_path=Path(self.output_path.get().strip()),
             history_db_path=Path(self.history_db_path.get().strip()),
             enable_history=self.enable_history.get(),
+            enable_screenshots=self.enable_screenshots.get(),
+            screenshot_dir=Path(self.screenshot_dir.get().strip()),
             auction_filters=self._read_auction_filters(),
             select_org_filters=self._read_select_org_filters(),
             select_org_result_filters=self._read_select_org_result_filters(),
@@ -1070,6 +1288,7 @@ class CrawlerTab(ctk.CTkFrame):
         self.page_size.set(DEFAULT_UI_PAGE_SIZE)
         self.detail_workers.set(DEFAULT_DETAIL_WORKERS)
         self.crawl_all.set(False)
+        self.enable_screenshots.set(False)
 
 
 class HistoryTab(ctk.CTkFrame):

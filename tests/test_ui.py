@@ -11,7 +11,11 @@ from dgts_crawler.ui import (
     NOTICE_KIND_OPTIONS,
     TAB_CONFIGS,
     RunCoordinator,
+    _filter_option_labels,
+    _focus_is_within_combo_suggestion,
     _option_map,
+    _raise_suggestion_popup,
+    _suggestion_popup_height,
     format_done_message,
     format_history_page_status,
     format_history_table_value,
@@ -97,6 +101,68 @@ def test_option_map_uses_id_and_requested_label_field():
     assert options == {"Tất cả": "", "Tổ chức A": "2063", "Tổ chức B": "2064"}
 
 
+def test_filter_option_labels_keeps_all_label_and_matches_typed_text():
+    labels = ["Tất cả", "Hà Nội", "Hải Phòng", "Đà Nẵng", "Cần Thơ"]
+
+    assert _filter_option_labels(labels, "h") == ["Tất cả", "Hà Nội", "Hải Phòng", "Cần Thơ"]
+    assert _filter_option_labels(labels, "hai") == ["Tất cả", "Hải Phòng"]
+    assert _filter_option_labels(labels, "da") == ["Tất cả", "Đà Nẵng"]
+    assert _filter_option_labels(labels, "   ") == labels
+
+
+def test_suggestion_popup_height_is_capped_but_never_empty():
+    assert _suggestion_popup_height(0) == 1
+    assert _suggestion_popup_height(3) == 3
+    assert _suggestion_popup_height(99) == 10
+
+
+def test_focus_inside_combo_entry_counts_as_suggestion_context():
+    class Popup:
+        pass
+
+    class Root:
+        pass
+
+    popup = Popup()
+    root = Root()
+
+    class Focus:
+        def __init__(self, toplevel):
+            self.toplevel = toplevel
+
+        def winfo_toplevel(self):
+            return self.toplevel
+
+    class Combo:
+        pass
+
+    combo = Combo()
+    combo._entry = Focus(root)
+
+    assert _focus_is_within_combo_suggestion(combo._entry, combo, popup) is True
+    assert _focus_is_within_combo_suggestion(Focus(popup), combo, popup) is True
+    assert _focus_is_within_combo_suggestion(Focus(root), combo, popup) is False
+
+
+def test_raise_suggestion_popup_lifts_popup_without_keeping_topmost():
+    calls = []
+
+    class Popup:
+        def lift(self):
+            calls.append("lift")
+
+        def attributes(self, key, value):
+            calls.append((key, value))
+
+        def after(self, _delay, callback):
+            calls.append("after")
+            callback()
+
+    _raise_suggestion_popup(Popup())
+
+    assert calls == ["lift", ("-topmost", True), "after", ("-topmost", False)]
+
+
 def test_tab_1_output_file_is_auction_excel():
     assert TAB_CONFIGS[0].notice_kind == "auction"
     assert TAB_CONFIGS[0].output_default == Path("outputs") / "dgts_auction_notices.xlsx"
@@ -116,6 +182,8 @@ def test_auction_config_uses_public_date_range_for_logged_crawl_dates():
     tab.output_path = _value("outputs/out.xlsx")
     tab.history_db_path = _value("outputs/history.sqlite")
     tab.enable_history = _value(True)
+    tab.enable_screenshots = _value(False)
+    tab.screenshot_dir = _value("outputs/screenshots")
     tab._read_auction_filters = lambda: "auction-filters"
 
     config = CrawlerTab._read_config(tab)
@@ -123,6 +191,30 @@ def test_auction_config_uses_public_date_range_for_logged_crawl_dates():
     assert config.from_date == "31/05/2026"
     assert config.to_date == "07/06/2026"
     assert config.auction_filters == "auction-filters"
+
+
+def test_tab_config_reads_screenshot_options(tmp_path):
+    tab = object.__new__(CrawlerTab)
+    tab.notice_kind = "auction"
+    tab.from_date = _value("01/01/2000")
+    tab.to_date = _value("02/01/2000")
+    tab.auction_start_publish_date = _value("31/05/2026")
+    tab.auction_end_publish_date = _value("07/06/2026")
+    tab.max_pages = _value("10")
+    tab.page_size = _value("100")
+    tab.detail_workers = _value("5")
+    tab.crawl_all = _value(False)
+    tab.output_path = _value("outputs/out.xlsx")
+    tab.history_db_path = _value("outputs/history.sqlite")
+    tab.enable_history = _value(True)
+    tab.enable_screenshots = _value(True)
+    tab.screenshot_dir = _value(str(tmp_path / "shots"))
+    tab._read_auction_filters = lambda: "auction-filters"
+
+    config = CrawlerTab._read_config(tab)
+
+    assert config.enable_screenshots is True
+    assert config.screenshot_dir == tmp_path / "shots"
 
 
 class _value:
