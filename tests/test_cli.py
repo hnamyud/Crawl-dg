@@ -30,3 +30,9 @@ def test_parse_args_accepts_detail_workers():
     args = _parse_args(["--detail-workers", "5"])
 
     assert args.detail_workers == 5
+
+
+def test_parse_args_can_disable_timestamped_output():
+    args = _parse_args(["--no-output-timestamp"])
+
+    assert args.no_output_timestamp is True

@@ -33,7 +33,9 @@ Trong mỗi tab chỉ cần chọn khoảng ngày, giới hạn trang, `File lư
 `Số bản ghi mỗi trang` trong UI mặc định là `100` để giảm số lần gọi phân trang. `Số luồng tải chi tiết` mặc định là `5` để tải chi tiết nhiều tin song song. Nút `Dừng và xuất file` sẽ ngừng nhận việc mới, đợi các request chi tiết đang chạy kết thúc, rồi lưu Excel bằng dữ liệu đã crawl được.
 App chỉ cho một tab crawl tại một thời điểm để tránh nhiều luồng cùng gọi API và cùng ghi DB lịch sử. Nếu một tab đang chạy, tab khác sẽ báo chờ tab hiện tại hoàn tất hoặc dừng trước.
 
-Mặc định tool cũng lưu lịch sử crawl vào SQLite tại `outputs\dgts_history.sqlite` để phát hiện tin mới, tin đổi nội dung, tin biến mất trong đúng khoảng ngày đang crawl, và tin xuất hiện lại. Tin chỉ được đánh dấu `MISSING` sau khi không thấy trong danh sách crawl và kiểm tra lại detail/API cũng không còn dữ liệu hợp lệ. Nếu bấm `Dừng và xuất file`, tool vẫn lưu các tin đã quét được nhưng không đánh dấu `MISSING` để tránh cảnh báo sai do crawl chưa hết phạm vi.
+Mỗi lần chạy từ UI/CLI tạo một file Excel snapshot bất biến, tự thêm thời điểm crawl vào tên file (ví dụ `dgts_auction_notices_20260711_183045.xlsx`). Nếu crawl bị dừng hoặc không chọn crawl toàn bộ dữ liệu, file có hậu tố `_PARTIAL`; file cũ không bị ghi đè. Dùng `--no-output-timestamp` nếu cần ghi đúng đường dẫn `--output`.
+
+Mặc định tool cũng lưu lịch sử crawl vào SQLite tại `outputs\dgts_history.sqlite`. Mỗi run lưu snapshot append-only trong `notice_snapshots`, nên có thể đối chiếu cả những tin không đổi nội dung. Tool nhận diện `SECOND_PUBLICATION` khi cùng ID xuất hiện `publishTime2`, thay đổi nội dung, đăng lại dưới ID khác, tin bị gỡ khỏi danh sách (`DELISTED`) và tin bị xóa xác nhận qua hai run đầy đủ (`REMOVED`). Để tránh cảnh báo giả, trạng thái biến mất chỉ được kiểm tra khi chọn crawl toàn bộ dữ liệu (`--all`/`Crawl tất cả`). Lỗi truy cập như 406/429/5xx/timeout được ghi `CHECK_FAILED`, không bị coi là tin biến mất.
 
 ## Build EXE
 
@@ -100,7 +102,8 @@ SQLite lưu 3 nhóm dữ liệu:
 
 - `crawl_runs`: mỗi lần crawl, khoảng ngày, loại tin và số lượng event.
 - `notice_current`: trạng thái mới nhất của từng tin theo khóa `notice_kind + notice_id`.
-- `notice_history`: log append-only các event `NEW`, `CHANGED`, `MISSING`, `REAPPEARED`, `SUSPECT_REPOST`, `SAME_ASSET_NAME`.
+- `notice_history`: log append-only các event. Event cũ vẫn được giữ để tương thích; event mới gồm `SECOND_PUBLICATION`, `REPUBLISHED_EXPECTED`, `REPUBLISHED_CHANGED`, `DELISTED`, `REMOVAL_PENDING`, `REMOVED`, `CHECK_FAILED`.
+- `notice_snapshots`: dữ liệu quan sát của từng tin theo mỗi lần crawl, bao gồm hash nội dung, hash định danh tài sản và trạng thái search/detail.
 
 Logic xử lý:
 

@@ -125,8 +125,17 @@ def test_history_store_records_new_changed_missing_and_reappeared(tmp_path):
         missing_exists_validator=lambda snapshot: False,
     )
 
-    assert missing.event_counts == _counts(MISSING=1)
-    assert store.history_events()[-1] == ("MISSING", "1")
+    assert missing.event_counts["REMOVAL_PENDING"] == 1
+    assert store.history_events()[-1] == ("REMOVAL_PENDING", "1")
+
+    removed = store.record_crawl(
+        notice_kind="auction",
+        start_date="05/06/2026",
+        end_date="05/06/2026",
+        snapshots=[],
+        missing_exists_validator=lambda snapshot: False,
+    )
+    assert removed.event_counts["REMOVED"] == 1
 
     reappeared = store.record_crawl(
         notice_kind="auction",
@@ -137,6 +146,29 @@ def test_history_store_records_new_changed_missing_and_reappeared(tmp_path):
 
     assert reappeared.event_counts == _counts(REAPPEARED=1)
     assert store.history_events()[-1] == ("REAPPEARED", "1")
+
+
+def test_history_store_appends_observations_and_detects_second_publication(tmp_path):
+    store = HistoryStore(tmp_path / "history.sqlite")
+    first = _snapshot()
+    first.tracked_fields.update({"publish_time1": 1000, "publish_time2": None, "publish_round": 1})
+    first = HistorySnapshot(
+        **{**first.__dict__, "publish_time1": 1000, "publish_time2": None}
+    )
+    store.record_crawl("auction", "05/06/2026", "05/06/2026", [first])
+
+    second = _snapshot()
+    second.tracked_fields.update({"publish_time1": 1000, "publish_time2": 2000, "publish_round": 2})
+    second = HistorySnapshot(
+        **{**second.__dict__, "publish_time1": 1000, "publish_time2": 2000}
+    )
+    result = store.record_crawl("auction", "05/06/2026", "05/06/2026", [second])
+
+    assert result.event_counts["SECOND_PUBLICATION"] == 1
+    assert ("SECOND_PUBLICATION", "1") in store.history_events()
+    with store._connect() as conn:
+        rows = conn.execute("SELECT publish_round, search_present FROM notice_snapshots ORDER BY id").fetchall()
+    assert [(row["publish_round"], row["search_present"]) for row in rows] == [(1, 1), (2, 1)]
 
 
 def test_history_store_does_not_mark_changed_when_only_group_changes(tmp_path):
@@ -164,7 +196,7 @@ def test_history_store_does_not_mark_changed_when_only_group_changes(tmp_path):
     assert store.history_events() == [("NEW", "1")]
 
 
-def test_history_store_does_not_mark_changed_when_only_asset_name_and_url_change(tmp_path):
+def test_history_store_ignores_reordered_asset_name_and_url_change(tmp_path):
     db_path = tmp_path / "history.sqlite"
     store = HistoryStore(db_path)
     first = _snapshot(
@@ -192,7 +224,7 @@ def test_history_store_does_not_mark_changed_when_only_asset_name_and_url_change
     assert store.history_events() == [("NEW", "1")]
 
 
-def test_history_store_excludes_asset_name_and_url_from_changed_fields(tmp_path):
+def test_history_store_includes_asset_name_and_excludes_url_from_changed_fields(tmp_path):
     db_path = tmp_path / "history.sqlite"
     store = HistoryStore(db_path)
     first = _snapshot(name="Tài sản A")
@@ -216,9 +248,9 @@ def test_history_store_excludes_asset_name_and_url_from_changed_fields(tmp_path)
 
     assert result.event_counts == _counts(CHANGED=1)
     rows = store.list_history_rows(event_type="CHANGED")
-    assert rows[0].changed_fields == "deadline"
-    assert rows[0].old_values == "deadline: 10/06/2026"
-    assert rows[0].new_values == "deadline: 12/06/2026"
+    assert rows[0].changed_fields == "asset_name, deadline"
+    assert "asset_name: Tài sản A" in rows[0].old_values
+    assert "deadline: 10/06/2026" in rows[0].old_values
 
 
 def test_history_store_does_not_mark_changed_when_only_province_mapping_changes(tmp_path):
@@ -315,8 +347,8 @@ def test_history_store_does_not_mark_missing_when_detail_still_exists(tmp_path):
         missing_exists_validator=lambda snapshot: True,
     )
 
-    assert result.event_counts == _counts()
-    assert ("MISSING", "1") not in store.history_events()
+    assert result.event_counts["DELISTED"] == 1
+    assert ("REMOVED", "1") not in store.history_events()
 
 
 def test_history_store_marks_missing_when_detail_no_longer_exists(tmp_path):
@@ -337,8 +369,8 @@ def test_history_store_marks_missing_when_detail_no_longer_exists(tmp_path):
         missing_exists_validator=lambda snapshot: False,
     )
 
-    assert result.event_counts == _counts(MISSING=1)
-    assert store.history_events()[-1] == ("MISSING", "1")
+    assert result.event_counts["REMOVAL_PENDING"] == 1
+    assert store.history_events()[-1] == ("REMOVAL_PENDING", "1")
 
 
 def test_history_store_skips_missing_when_validator_raises(tmp_path):
@@ -362,8 +394,8 @@ def test_history_store_skips_missing_when_validator_raises(tmp_path):
         missing_exists_validator=fail,
     )
 
-    assert result.event_counts == _counts()
-    assert ("MISSING", "1") not in store.history_events()
+    assert result.event_counts["CHECK_FAILED"] == 1
+    assert ("REMOVED", "1") not in store.history_events()
 
 
 def test_history_store_does_not_mark_missing_when_same_asset_appears_with_new_id(tmp_path):
@@ -423,12 +455,14 @@ def test_history_store_lists_history_rows_with_filters(tmp_path):
     assert rows[0].notice_kind == "auction"
     assert rows[0].notice_id == "1"
     assert rows[0].detail_url == "https://dgts.moj.gov.vn/tin-1.html"
-    assert rows[0].changed_fields == "deadline"
+    assert rows[0].changed_fields == "asset_name, deadline"
     assert "deadline:" in rows[0].changed_details
     assert "Cũ: " in rows[0].changed_details
     assert "Mới: 12/06/2026" in rows[0].changed_details
-    assert rows[0].old_values == "deadline: "
-    assert rows[0].new_values == "deadline: 12/06/2026"
+    assert "asset_name: Tài sản A" in rows[0].old_values
+    assert "deadline: " in rows[0].old_values
+    assert "asset_name: Tài sản B" in rows[0].new_values
+    assert "deadline: 12/06/2026" in rows[0].new_values
 
 
 def test_history_store_lists_history_rows_with_limit_and_offset(tmp_path):
@@ -484,6 +518,7 @@ def test_history_store_marks_new_notice_with_same_asset_fingerprint_as_suspect_r
         ("NEW", "574871"),
         ("NEW", "576556"),
         ("SUSPECT_REPOST", "576556"),
+        ("REPUBLISHED_EXPECTED", "576556"),
     ]
     rows = store.list_history_rows(event_type="SUSPECT_REPOST")
     assert len(rows) == 1
@@ -656,9 +691,10 @@ def test_history_store_marks_cross_id_reappeared_when_missing_asset_returns_with
     )
 
     assert result.event_counts == _counts(NEW=1, REAPPEARED=1, SUSPECT_REPOST=1)
-    assert store.history_events()[-3:] == [
+    assert store.history_events()[-4:] == [
         ("NEW", "576556"),
         ("SUSPECT_REPOST", "576556"),
+        ("REPUBLISHED_EXPECTED", "576556"),
         ("REAPPEARED", "576556"),
     ]
     rows = store.list_history_rows(event_type="REAPPEARED")

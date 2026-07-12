@@ -4,7 +4,16 @@ from pathlib import Path
 import pytest
 
 from dgts_crawler.history_store import HistorySnapshot
-from dgts_crawler.runner import AuctionFilters, CrawlerConfig, format_date_arg, resolve_dates, run_crawl, validate_config
+from dgts_crawler.runner import (
+    AuctionFilters,
+    CrawlerConfig,
+    _resolve_snapshot_output_path,
+    format_date_arg,
+    resolve_dates,
+    run_crawl,
+    validate_config,
+)
+from dgts_crawler.utils import VIETNAM_TZ
 
 
 def _history_counts(**overrides):
@@ -24,6 +33,19 @@ def test_default_page_size_is_10_like_the_website():
     assert CrawlerConfig().page_size == 10
     assert CrawlerConfig().notice_kind == "auction"
     assert CrawlerConfig().detail_workers == 1
+
+
+def test_timestamped_snapshot_output_is_immutable(tmp_path):
+    config = CrawlerConfig(
+        output_path=tmp_path / "auction.xlsx",
+        timestamp_output=True,
+        run_started_at=datetime(2026, 7, 11, 18, 30, 45, tzinfo=VIETNAM_TZ),
+    )
+    first = _resolve_snapshot_output_path(config, partial=False)
+    assert first.name == "auction_20260711_183045.xlsx"
+    first.touch()
+    assert _resolve_snapshot_output_path(config, partial=False).name == "auction_20260711_183045_02.xlsx"
+    assert _resolve_snapshot_output_path(config, partial=True).name == "auction_20260711_183045_PARTIAL.xlsx"
 
 
 def test_format_date_arg_accepts_iso_and_vietnamese_dates():
@@ -146,7 +168,7 @@ def test_run_crawl_records_auction_history_snapshots(monkeypatch, tmp_path):
         detail_url="https://dgts.moj.gov.vn/tin-2.html",
         tracked_fields={},
         raw_payload={},
-    )) is True
+    )) == "EXISTS"
     assert len(calls["snapshots"]) == 1
     snapshot = calls["snapshots"][0]
     assert snapshot.notice_id == "1"
@@ -211,7 +233,7 @@ def test_run_crawl_select_org_history_validator_checks_detail(monkeypatch, tmp_p
         detail_url="https://dgts.moj.gov.vn/tin-2.html",
         tracked_fields={},
         raw_payload={},
-    )) is True
+    )) == "EXISTS"
     assert ("detail", "2") in detail_calls
 
 
@@ -270,7 +292,7 @@ def test_run_crawl_select_org_result_history_validator_checks_result_endpoints(m
         detail_url="https://dgts.moj.gov.vn/tin-2.html",
         tracked_fields={},
         raw_payload={},
-    )) is True
+    )) == "EXISTS"
     assert ("info", "2") in info_calls
 
 
@@ -324,7 +346,7 @@ def test_run_crawl_history_validator_logs_and_skips_missing_on_detail_error(monk
         progress=messages.append,
     )
 
-    assert calls["validator_result"] is True
+    assert calls["validator_result"] == "ACCESS_ERROR"
     assert any("Bỏ qua MISSING" in message and "missing" in message for message in messages)
 
 
@@ -585,7 +607,13 @@ def test_run_crawl_select_org_fetches_detail_property_info_and_exports_partial_r
     monkeypatch.setattr("dgts_crawler.runner.write_select_org_workbook", fake_write_select_org_workbook)
 
     result, count = run_crawl(
-        CrawlerConfig(notice_kind="select-org", output_path=output, enable_history=False),
+        CrawlerConfig(
+            notice_kind="select-org",
+            from_date="05/06/2026",
+            to_date="05/06/2026",
+            output_path=output,
+            enable_history=False,
+        ),
         client=FakeClient(),
         should_stop=lambda: len(detail_calls) >= 1,
     )

@@ -22,10 +22,10 @@ from dgts_crawler.ui import (
 )
 
 
-def test_ui_uses_legacy_notebook_tab_labels():
-    assert [config.tab_label for config in TAB_CONFIGS] == ["Tab 1", "Tab 2", "Tab 3"]
-    assert HISTORY_TAB_LABEL == "Tab 4"
-    assert NOTICE_KIND_OPTIONS["Tab 1 - Đấu giá"] == "auction"
+def test_ui_uses_descriptive_left_aligned_tab_labels():
+    assert [config.tab_label for config in TAB_CONFIGS] == ["Đấu giá", "Chọn tổ chức", "Kết quả lựa chọn"]
+    assert HISTORY_TAB_LABEL == "Lịch sử thay đổi"
+    assert NOTICE_KIND_OPTIONS["Đấu giá"] == "auction"
 
 
 def test_run_coordinator_allows_only_one_active_crawl():

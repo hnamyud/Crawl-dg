@@ -20,6 +20,7 @@ def main() -> None:
             output_path=Path(args.output),
             history_db_path=Path(args.history_db),
             enable_history=not args.no_history,
+            timestamp_output=not args.no_output_timestamp,
         )
     )
     print(f"Wrote {count} notices to {output}")
@@ -40,6 +41,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Notice type to crawl: auction, select-org, or select-org-result.",
     )
     parser.add_argument("--output", default="DGTS_Output.xlsx", help="Output workbook path.")
+    parser.add_argument(
+        "--no-output-timestamp",
+        action="store_true",
+        help="Write exactly --output instead of creating an immutable timestamped snapshot.",
+    )
     parser.add_argument("--history-db", default="outputs/dgts_history.sqlite", help="SQLite history database path.")
     parser.add_argument("--no-history", action="store_true", help="Disable SQLite history tracking.")
     return parser.parse_args(argv)

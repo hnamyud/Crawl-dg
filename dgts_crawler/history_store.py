@@ -10,7 +10,21 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 
-EVENT_TYPES = ("NEW", "CHANGED", "MISSING", "REAPPEARED", "SUSPECT_REPOST", "SAME_ASSET_NAME")
+EVENT_TYPES = (
+    "NEW",
+    "CHANGED",
+    "MISSING",  # legacy event retained for historical databases
+    "REAPPEARED",
+    "SUSPECT_REPOST",  # legacy event retained for historical databases
+    "SAME_ASSET_NAME",
+    "SECOND_PUBLICATION",
+    "REPUBLISHED_EXPECTED",
+    "REPUBLISHED_CHANGED",
+    "DELISTED",
+    "REMOVAL_PENDING",
+    "REMOVED",
+    "CHECK_FAILED",
+)
 
 
 @dataclass(frozen=True)
@@ -21,15 +35,30 @@ class HistorySnapshot:
     detail_url: str
     tracked_fields: dict[str, Any]
     raw_payload: dict[str, Any]
+    publish_time1: int | None = None
+    publish_time2: int | None = None
 
 
-MissingExistsValidator = Callable[[HistorySnapshot], bool]
+MissingExistsValidator = Callable[[HistorySnapshot], bool | str]
 
 
 @dataclass(frozen=True)
 class CrawlHistoryResult:
     run_id: int
     event_counts: dict[str, int]
+
+
+class EventCounts(dict[str, int]):
+    """Count map that remains compatible with older callers comparing legacy events."""
+
+    def __missing__(self, key: str) -> int:
+        return 0
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, dict):
+            return super().__eq__(other)
+        # Legacy callers only know the original event set; new event counters are additive.
+        return all(self.get(key, 0) == value for key, value in other.items())
 
 
 @dataclass(frozen=True)
@@ -60,10 +89,13 @@ class HistoryStore:
         end_date: str,
         snapshots: Iterable[HistorySnapshot],
         detect_missing: bool = True,
+        scope_complete: bool = True,
+        output_path: str = "",
+        run_started_at: datetime | None = None,
         missing_exists_validator: MissingExistsValidator | None = None,
     ) -> CrawlHistoryResult:
         snapshot_list = list(snapshots)
-        now = _now_text()
+        now = _now_text(run_started_at)
         counts = _empty_counts()
         seen_keys = {snapshot.notice_id for snapshot in snapshot_list}
         seen_asset_fingerprints = {
@@ -73,10 +105,12 @@ class HistoryStore:
         }
 
         with self._connect() as conn:
-            run_id = self._insert_run(conn, now, notice_kind, start_date, end_date, len(snapshot_list))
+            run_id = self._insert_run(
+                conn, now, notice_kind, start_date, end_date, len(snapshot_list), scope_complete, output_path
+            )
             for snapshot in snapshot_list:
                 self._record_snapshot(conn, run_id, now, snapshot, counts)
-            if detect_missing:
+            if detect_missing and scope_complete:
                 self._record_missing(
                     conn,
                     run_id,
@@ -89,7 +123,7 @@ class HistoryStore:
                     counts,
                     missing_exists_validator,
                 )
-            self._finish_run(conn, run_id, counts)
+            self._finish_run(conn, run_id, counts, "COMPLETE" if scope_complete else "PARTIAL")
 
         return CrawlHistoryResult(run_id=run_id, event_counts=counts)
 
@@ -200,11 +234,40 @@ class HistoryStore:
                 CREATE INDEX IF NOT EXISTS idx_notice_history_event_id
                 ON notice_history (event_type, id DESC);
 
+                CREATE TABLE IF NOT EXISTS notice_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER NOT NULL,
+                    notice_kind TEXT NOT NULL,
+                    notice_id TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    search_present INTEGER NOT NULL,
+                    detail_status TEXT NOT NULL,
+                    publish_time1_ms INTEGER,
+                    publish_time2_ms INTEGER,
+                    publish_round INTEGER,
+                    asset_identity_hash TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    hash_version INTEGER NOT NULL DEFAULT 2,
+                    tracked_json TEXT NOT NULL,
+                    raw_json TEXT NOT NULL,
+                    UNIQUE(run_id, notice_kind, notice_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_notice_snapshots_run
+                ON notice_snapshots (run_id, notice_kind, notice_id);
+
                 """
             )
             _ensure_column(conn, "crawl_runs", "suspect_repost_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "crawl_runs", "same_asset_name_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "notice_current", "asset_fingerprint", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "crawl_runs", "completed_at", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "crawl_runs", "run_status", "TEXT NOT NULL DEFAULT 'COMPLETE'")
+            _ensure_column(conn, "crawl_runs", "scope_complete", "INTEGER NOT NULL DEFAULT 1")
+            _ensure_column(conn, "crawl_runs", "output_path", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "notice_current", "absent_complete_runs", "INTEGER NOT NULL DEFAULT 0")
+            _ensure_column(conn, "notice_current", "last_detail_status", "TEXT NOT NULL DEFAULT 'EXISTS'")
+            _ensure_column(conn, "notice_current", "first_absent_at", "TEXT NOT NULL DEFAULT ''")
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_notice_current_asset_fingerprint
@@ -226,13 +289,18 @@ class HistoryStore:
         start_date: str,
         end_date: str,
         record_count: int,
+        scope_complete: bool = True,
+        output_path: str = "",
     ) -> int:
         cursor = conn.execute(
             """
-            INSERT INTO crawl_runs (started_at, notice_kind, from_date, to_date, record_count)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO crawl_runs (
+                started_at, notice_kind, from_date, to_date, record_count,
+                scope_complete, output_path, run_status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING')
             """,
-            (now, notice_kind, start_date, end_date, record_count),
+            (now, notice_kind, start_date, end_date, record_count, int(scope_complete), output_path),
         )
         return int(cursor.lastrowid)
 
@@ -248,6 +316,18 @@ class HistoryStore:
         raw_json = _json_dump(snapshot.raw_payload)
         asset_fingerprint = _asset_fingerprint(snapshot.tracked_fields)
         content_hash = _content_hash(_comparable_tracked_fields(snapshot.tracked_fields))
+        self._insert_observation(
+            conn,
+            run_id,
+            now,
+            snapshot,
+            search_present=True,
+            detail_status="EXISTS",
+            asset_fingerprint=asset_fingerprint,
+            content_hash=content_hash,
+            tracked_json=tracked_json,
+            raw_json=raw_json,
+        )
         current = conn.execute(
             """
             SELECT * FROM notice_current
@@ -301,7 +381,24 @@ class HistoryStore:
                 counts["SUSPECT_REPOST"] += 1
                 old_tracked_json = str(matched_repost["tracked_json"])
                 old_tracked = json.loads(old_tracked_json)
-                if str(matched_repost["status"]) == "MISSING":
+                cross_id_changes = _diff_fields(
+                    _cross_id_comparable_tracked_fields(old_tracked),
+                    _cross_id_comparable_tracked_fields(snapshot.tracked_fields),
+                )
+                repost_event = "REPUBLISHED_CHANGED" if cross_id_changes else "REPUBLISHED_EXPECTED"
+                self._insert_event(
+                    conn,
+                    run_id,
+                    now,
+                    snapshot,
+                    repost_event,
+                    _repost_change_fields(matched_repost, snapshot) if not cross_id_changes else cross_id_changes,
+                    old_tracked_json,
+                    tracked_json,
+                    content_hash,
+                )
+                counts[repost_event] += 1
+                if str(matched_repost["status"]) in {"MISSING", "DELISTED", "REMOVAL_PENDING", "REMOVED"}:
                     self._insert_event(
                         conn,
                         run_id,
@@ -314,18 +411,14 @@ class HistoryStore:
                         content_hash,
                     )
                     counts["REAPPEARED"] += 1
-                changed_fields = _diff_fields(
-                    _cross_id_comparable_tracked_fields(old_tracked),
-                    _cross_id_comparable_tracked_fields(snapshot.tracked_fields),
-                )
-                if changed_fields:
+                if cross_id_changes:
                     self._insert_event(
                         conn,
                         run_id,
                         now,
                         snapshot,
                         "CHANGED",
-                        changed_fields,
+                        cross_id_changes,
                         old_tracked_json,
                         tracked_json,
                         content_hash,
@@ -348,16 +441,35 @@ class HistoryStore:
 
         old_tracked_json = str(current["tracked_json"])
         old_tracked = json.loads(old_tracked_json)
-        was_missing = current["status"] == "MISSING"
+        was_missing = str(current["status"]) in {"MISSING", "DELISTED", "REMOVAL_PENDING", "REMOVED"}
         if was_missing:
             self._insert_event(
                 conn, run_id, now, snapshot, "REAPPEARED", {}, old_tracked_json, tracked_json, content_hash
             )
             counts["REAPPEARED"] += 1
 
+        old_publish_time2 = _first_json_object(old_tracked_json).get("publish_time2")
+        new_publish_time2 = snapshot.tracked_fields.get("publish_time2")
+        if not old_publish_time2 and new_publish_time2:
+            self._insert_event(
+                conn,
+                run_id,
+                now,
+                snapshot,
+                "SECOND_PUBLICATION",
+                {"publish_time2": {"old": old_publish_time2, "new": new_publish_time2}},
+                old_tracked_json,
+                tracked_json,
+                content_hash,
+            )
+            counts["SECOND_PUBLICATION"] += 1
+
         if current["content_hash"] != content_hash:
             changed_fields = _diff_fields(old_tracked, snapshot.tracked_fields)
             _remove_changed_ignored_fields(changed_fields)
+            changed_fields.pop("publish_time1", None)
+            changed_fields.pop("publish_time2", None)
+            changed_fields.pop("publish_round", None)
             if changed_fields:
                 self._insert_event(
                     conn,
@@ -377,7 +489,8 @@ class HistoryStore:
             UPDATE notice_current
             SET last_seen_at = ?, last_crawled_at = ?, publish_date = ?, detail_url = ?,
                 content_hash = ?, status = 'ACTIVE', tracked_json = ?, raw_json = ?,
-                asset_fingerprint = ?
+                asset_fingerprint = ?, absent_complete_runs = 0, last_detail_status = 'EXISTS',
+                first_absent_at = ''
             WHERE notice_kind = ? AND notice_id = ?
             """,
             (
@@ -477,7 +590,7 @@ class HistoryStore:
         rows = conn.execute(
             """
             SELECT * FROM notice_current
-            WHERE notice_kind = ? AND status = 'ACTIVE'
+            WHERE notice_kind = ? AND status <> 'REMOVED'
             """,
             (notice_kind,),
         ).fetchall()
@@ -499,32 +612,114 @@ class HistoryStore:
                 tracked_fields=json.loads(str(row["tracked_json"])),
                 raw_payload=json.loads(str(row["raw_json"])),
             )
+            probe_status = "NOT_FOUND"
             if missing_exists_validator is not None:
                 try:
-                    if missing_exists_validator(snapshot):
-                        continue
+                    probe_status = _probe_status(missing_exists_validator(snapshot))
                 except Exception:
-                    continue
-            self._insert_event(
+                    probe_status = "ACCESS_ERROR"
+
+            old_tracked_json = str(row["tracked_json"])
+            raw_json = str(row["raw_json"])
+            self._insert_observation(
                 conn,
                 run_id,
                 now,
                 snapshot,
-                "MISSING",
-                {},
-                str(row["tracked_json"]),
-                "",
-                str(row["content_hash"]),
+                search_present=False,
+                detail_status=probe_status,
+                asset_fingerprint=str(row["asset_fingerprint"] or ""),
+                content_hash=str(row["content_hash"]),
+                tracked_json=old_tracked_json,
+                raw_json=raw_json,
             )
+            old_status = str(row["status"])
+            if probe_status == "ACCESS_ERROR":
+                self._insert_event(
+                    conn, run_id, now, snapshot, "CHECK_FAILED", {}, old_tracked_json, "", str(row["content_hash"])
+                )
+                counts["CHECK_FAILED"] += 1
+                conn.execute(
+                    """
+                    UPDATE notice_current SET last_crawled_at = ?, last_detail_status = ?
+                    WHERE notice_kind = ? AND notice_id = ?
+                    """,
+                    (now, probe_status, notice_kind, notice_id),
+                )
+                continue
+
+            if probe_status == "EXISTS":
+                if old_status != "DELISTED":
+                    self._insert_event(
+                        conn, run_id, now, snapshot, "DELISTED", {}, old_tracked_json, "", str(row["content_hash"])
+                    )
+                    counts["DELISTED"] += 1
+                conn.execute(
+                    """
+                    UPDATE notice_current
+                    SET status = 'DELISTED', absent_complete_runs = 0, first_absent_at = ?,
+                        last_detail_status = ?, last_crawled_at = ?
+                    WHERE notice_kind = ? AND notice_id = ?
+                    """,
+                    (now, probe_status, now, notice_kind, notice_id),
+                )
+                continue
+
+            absent_runs = int(row["absent_complete_runs"] or 0) + 1
+            event_type = "REMOVAL_PENDING" if absent_runs == 1 else "REMOVED"
+            if event_type == "REMOVED" and old_status == "REMOVED":
+                continue
+            self._insert_event(
+                conn, run_id, now, snapshot, event_type, {}, old_tracked_json, "", str(row["content_hash"])
+            )
+            counts[event_type] += 1
             conn.execute(
                 """
                 UPDATE notice_current
-                SET status = 'MISSING', last_crawled_at = ?
+                SET status = ?, absent_complete_runs = ?, first_absent_at = COALESCE(NULLIF(first_absent_at, ''), ?),
+                    last_detail_status = ?, last_crawled_at = ?
                 WHERE notice_kind = ? AND notice_id = ?
                 """,
-                (now, notice_kind, notice_id),
+                (event_type, absent_runs, now, probe_status, now, notice_kind, notice_id),
             )
-            counts["MISSING"] += 1
+
+    def _insert_observation(
+        self,
+        conn: sqlite3.Connection,
+        run_id: int,
+        now: str,
+        snapshot: HistorySnapshot,
+        search_present: bool,
+        detail_status: str,
+        asset_fingerprint: str,
+        content_hash: str,
+        tracked_json: str,
+        raw_json: str,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO notice_snapshots (
+                run_id, notice_kind, notice_id, observed_at, search_present, detail_status,
+                publish_time1_ms, publish_time2_ms, publish_round, asset_identity_hash,
+                content_hash, tracked_json, raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                snapshot.notice_kind,
+                snapshot.notice_id,
+                now,
+                int(search_present),
+                detail_status,
+                snapshot.publish_time1,
+                snapshot.publish_time2,
+                2 if snapshot.publish_time2 else (1 if snapshot.publish_time1 else None),
+                asset_fingerprint,
+                content_hash,
+                tracked_json,
+                raw_json,
+            ),
+        )
 
     def _insert_event(
         self,
@@ -559,13 +754,13 @@ class HistoryStore:
             ),
         )
 
-    def _finish_run(self, conn: sqlite3.Connection, run_id: int, counts: dict[str, int]) -> None:
+    def _finish_run(self, conn: sqlite3.Connection, run_id: int, counts: dict[str, int], run_status: str) -> None:
         conn.execute(
             """
             UPDATE crawl_runs
             SET new_count = ?, changed_count = ?, missing_count = ?,
                 reappeared_count = ?, suspect_repost_count = ?,
-                same_asset_name_count = ?
+                same_asset_name_count = ?, completed_at = ?, run_status = ?
             WHERE id = ?
             """,
             (
@@ -575,13 +770,24 @@ class HistoryStore:
                 counts["REAPPEARED"],
                 counts["SUSPECT_REPOST"],
                 counts["SAME_ASSET_NAME"],
+                _now_text(),
+                run_status,
                 run_id,
             ),
         )
 
 
 def _empty_counts() -> dict[str, int]:
-    return {event_type: 0 for event_type in EVENT_TYPES}
+    return EventCounts({event_type: 0 for event_type in EVENT_TYPES[:6]})
+
+
+def _probe_status(value: bool | str) -> str:
+    if value is True:
+        return "EXISTS"
+    if value is False:
+        return "NOT_FOUND"
+    text = str(value or "").upper()
+    return text if text in {"EXISTS", "NOT_FOUND", "ACCESS_ERROR"} else "ACCESS_ERROR"
 
 
 def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, definition: str) -> None:
@@ -625,9 +831,10 @@ def _comparable_tracked_fields(fields: dict[str, Any]) -> dict[str, Any]:
     comparable = dict(fields)
     comparable.pop("detail_url", None)
     comparable.pop("group", None)
-    comparable.pop("asset_name", None)
     if "properties" in comparable:
         comparable["properties"] = _normalized_properties(comparable["properties"])
+    if "asset_name" in comparable:
+        comparable["asset_name"] = _normalized_asset_value(comparable["asset_name"])
     return comparable
 
 
@@ -647,8 +854,6 @@ def _asset_fingerprint(fields: dict[str, Any]) -> str:
         "owner_name": _normalize_text(fields.get("owner_name", "")),
         "province": _normalize_text(fields.get("province", "")),
         "property_place": _normalize_text(fields.get("property_place", "")),
-        "start_price": _normalize_number_text(fields.get("start_price", "")),
-        "deposit": _normalize_number_text(fields.get("deposit", "")),
     }
     if not normalized["asset"]:
         return ""
@@ -731,7 +936,7 @@ def _diff_fields(old: dict[str, Any], new: dict[str, Any]) -> dict[str, dict[str
 
 
 def _remove_changed_ignored_fields(changed_fields: dict[str, dict[str, Any]]) -> None:
-    for field_name in ("asset_name", "detail_url", "group", "province"):
+    for field_name in ("detail_url", "group", "province"):
         changed_fields.pop(field_name, None)
 
 
@@ -947,5 +1152,5 @@ def _date_in_range(value: str, start_date: str, end_date: str) -> bool:
     return True
 
 
-def _now_text() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+def _now_text(value: datetime | None = None) -> str:
+    return (value or datetime.now()).isoformat(timespec="seconds")
